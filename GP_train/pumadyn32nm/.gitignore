@@ -1,0 +1,5 @@
+# Downloaded datasets (reproducible from code; never commit)
+data/
+
+# Generated benchmark outputs and figures
+results/
