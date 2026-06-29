@@ -131,11 +131,11 @@ local contributions from `tri_mass_loc` and `tri_stiff_loc`.
 \frac{|e|}{12}\begin{bmatrix}2&1&1\\1&2&1\\1&1&2\end{bmatrix}.
 ```
 
-The velocity mass is $M = \operatorname{blkdiag}(D,D)$.
+The velocity mass is $M = \mathrm{blkdiag}(D,D)$.
 
 **Scalar stiffness** $K_{ij} = \int_\Omega \nabla\phi_i\!\cdot\!\nabla\phi_j$,
 with local matrix $\dfrac{bb^\top + cc^\top}{4|e|}$ (the P1 gradients $b,c$ are
-constant on each element). The vector Laplacian is $A = \operatorname{blkdiag}(K,K)$.
+constant on each element). The vector Laplacian is $A = \mathrm{blkdiag}(K,K)$.
 
 **Discrete divergence** $B \in \mathbb{R}^{N\times 2N}$ (`assemble_divergence`),
 
@@ -295,7 +295,7 @@ systems:
 The preconditioner is
 
 ```math
-P \;=\; \operatorname{blkdiag}\!\Big(\operatorname{ichol}\big(\tfrac{M}{\Delta t}+\nu A\big),\;\; \tfrac{1}{\nu}D,\;\; I_\lambda\Big),
+P \;=\; \mathrm{blkdiag}\!\Big(\mathrm{ichol}\big(\tfrac{M}{\Delta t}+\nu A\big),\;\; \tfrac{1}{\nu}D,\;\; I_\lambda\Big),
 ```
 
 the classic Stokes block preconditioner (velocity block + scaled pressure mass;
