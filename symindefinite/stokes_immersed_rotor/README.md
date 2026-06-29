@@ -35,20 +35,20 @@ Incompressible **unsteady Stokes** flow on the channel
 $\Omega = [0,4]\times[0,1]$, containing a rigid solid that occupies the moving
 region $B(t)\subset\Omega$:
 
-$$
+```math
 \partial_t u \;-\; \nu\,\Delta u \;+\; \nabla p \;=\; f
 \qquad\text{in } \Omega,
-$$
+```
 
-$$
+```math
 \nabla\!\cdot u \;=\; 0
 \qquad\text{in } \Omega,
-$$
+```
 
-$$
+```math
 u \;=\; g(t)
 \qquad\text{on } B(t)\quad(\text{enforced weakly through }\lambda).
-$$
+```
 
 **Symbols.**
 
@@ -86,14 +86,14 @@ for pressure, and $\Lambda$ for the multiplier, which **lives only on the solid*
 $B(t)$. The variational problem is: find $u\in V$, $p\in Q$, $\lambda\in\Lambda$
 such that for all $v\in V$, $q\in Q$, $\mu\in\Lambda$,
 
-$$
+```math
 \begin{aligned}
 (\partial_t u,\,v) \;+\; \nu\,(\nabla u,\,\nabla v) \;-\; (p,\,\nabla\!\cdot v)
 \;+\; \langle \lambda,\,v\rangle_{B(t)} &= (f,\,v),\\[2pt]
 (\nabla\!\cdot u,\,q) &= 0,\\[2pt]
 \langle \mu,\,u\rangle_{B(t)} &= \langle \mu,\,g(t)\rangle_{B(t)}.
 \end{aligned}
-$$
+```
 
 Here $(\cdot,\cdot)$ is the $L^2(\Omega)$ inner product and
 $\langle\cdot,\cdot\rangle_{B(t)}$ is the **coupling pairing on the moving
@@ -122,43 +122,45 @@ pressure is $p_h = \sum_j p_j\,\psi_j$ with $\psi_j = \phi_j$. The DOF vector is
 ordered $[\,u_x;\,u_y\,]$ (two blocks of $N$), then $p$ (one block of $N$), then
 the multipliers $\lambda$.
 
-**Constant fluid blocks** (assembled once in `assemble_stokes_blocks`; local
-contributions from `tri_mass_loc` and `tri_stiff_loc`):
+**Constant fluid blocks** are assembled once in `assemble_stokes_blocks`, with
+local contributions from `tri_mass_loc` and `tri_stiff_loc`.
 
-- **Scalar mass** $D_{ij} = \displaystyle\int_\Omega \phi_i\,\phi_j$, with local
-  matrix $\dfrac{|e|}{12}\begin{bmatrix}2&1&1\\1&2&1\\1&1&2\end{bmatrix}$. The
-  velocity mass is $M = \operatorname{blkdiag}(D,D)$.
+**Scalar mass** $D_{ij} = \int_\Omega \phi_i\,\phi_j$, with local matrix
 
-- **Scalar stiffness** $K_{ij} = \displaystyle\int_\Omega \nabla\phi_i\!\cdot\!\nabla\phi_j$,
-  with local matrix $\dfrac{bb^\top + cc^\top}{4|e|}$ (the P1 gradients $b,c$ are
-  constant on each element). The vector Laplacian is
-  $A = \operatorname{blkdiag}(K,K)$.
+```math
+\frac{|e|}{12}\begin{bmatrix}2&1&1\\1&2&1\\1&1&2\end{bmatrix}.
+```
 
-- **Discrete divergence** $B \in \mathbb{R}^{N\times 2N}$
-  (`assemble_divergence`),
+The velocity mass is $M = \operatorname{blkdiag}(D,D)$.
 
-  $$
-  B_{k,(j,c)} \;=\; \int_\Omega \psi_k\,\partial_{x_c}\phi_j ,
-  \qquad c\in\{x,y\},
-  $$
+**Scalar stiffness** $K_{ij} = \int_\Omega \nabla\phi_i\!\cdot\!\nabla\phi_j$,
+with local matrix $\dfrac{bb^\top + cc^\top}{4|e|}$ (the P1 gradients $b,c$ are
+constant on each element). The vector Laplacian is $A = \operatorname{blkdiag}(K,K)$.
 
-  so that $B\,[\,u_x;u_y\,]$ is the discrete $\nabla\!\cdot u_h$. Because the
-  velocity gradients are element-constant and $\int_e \psi_k = |e|/3$, the entries
-  reduce to $b_j/6$ (x-component) and $c_j/6$ (y-component). $B^\top$ is the
-  discrete pressure gradient.
+**Discrete divergence** $B \in \mathbb{R}^{N\times 2N}$ (`assemble_divergence`),
 
-- **Pressure-stabilization Laplacian** $L = K$, scaled by
+```math
+B_{k,(j,c)} \;=\; \int_\Omega \psi_k\,\partial_{x_c}\phi_j ,
+\qquad c\in\{x,y\},
+```
 
-  $$
-  \varepsilon \;=\; \frac{h^2}{12\,\nu}.
-  $$
+so that $B\,[\,u_x;u_y\,]$ is the discrete $\nabla\!\cdot u_h$. Because the
+velocity gradients are element-constant and $\int_e \psi_k = |e|/3$, the entries
+reduce to $b_j/6$ (x-component) and $c_j/6$ (y-component). $B^\top$ is the
+discrete pressure gradient.
 
-  Equal-order P1–P1 **violates the inf–sup (LBB) condition**, so the discrete
-  pressure is unstable on its own. The **Brezzi–Pitkaränta** remedy adds the
-  weakly-consistent term $-\varepsilon\,(\nabla p_h,\nabla q_h)$ to the continuity
-  equation, i.e. a $-\varepsilon L$ block in the $(p,p)$ position. This block is
-  **negative semidefinite**, which is what makes the assembled matrix indefinite
-  (§5) rather than merely a zero-diagonal saddle.
+**Pressure-stabilization Laplacian** $L = K$, scaled by
+
+```math
+\varepsilon \;=\; \frac{h^2}{12\,\nu}.
+```
+
+Equal-order P1–P1 **violates the inf–sup (LBB) condition**, so the discrete
+pressure is unstable on its own. The **Brezzi–Pitkaränta** remedy adds the
+weakly-consistent term $-\varepsilon\,(\nabla p_h,\nabla q_h)$ to the continuity
+equation, i.e. a $-\varepsilon L$ block in the $(p,p)$ position. This block is
+**negative semidefinite**, which is what makes the assembled matrix indefinite
+(§5) rather than merely a zero-diagonal saddle.
 
 **Moving coupling block $C(t)$** (assembled every step in `assemble_coupling`) —
 this is the *only* time-dependent operator. The immersed constraint
@@ -167,9 +169,9 @@ velocity component. Because $u_h$ is P1, its value at a point is a barycentric
 combination of the three nodal values of the **host triangle** that contains the
 point:
 
-$$
+```math
 u_h\big(X_k(t)\big) \;=\; \sum_{j} w_{kj}(t)\,u_j ,
-$$
+```
 
 where $w_{kj}(t)$ are the barycentric weights of $X_k(t)$ in its host triangle,
 obtained from `pointLocation` (which triangle?) and `cartesianToBarycentric`
@@ -177,17 +179,17 @@ obtained from `pointLocation` (which triangle?) and `cartesianToBarycentric`
 component**, so $C(t)$ is sparse. Its right-hand side is the stacked prescribed
 velocity $g(t) = [\,V_x;\,V_y\,]$, and its row count is
 
-$$
+```math
 n_C(t) \;=\; 2\,\times\,(\text{number of Lagrange points currently inside }\Omega).
-$$
+```
 
 ## 5. Time discretization → the per-step KKT system
 
 Discretize the velocity time derivative by **backward Euler**,
 
-$$
+```math
 \partial_t u \;\approx\; \frac{u^n - u^{n-1}}{\Delta t},
-$$
+```
 
 and test against the P1 basis. The mass matrix multiplies the difference quotient,
 producing a $\dfrac{M}{\Delta t}$ contribution on the diagonal of the velocity
@@ -196,7 +198,7 @@ block and a known term $\dfrac{M}{\Delta t}\,u^{n-1}$ on the right-hand side
 Assembling everything from §3–§4 at time $t_n = n\,\Delta t$ gives the
 **symmetric indefinite saddle-point (KKT) system**
 
-$$
+```math
 \underbrace{\begin{bmatrix}
 \dfrac{M}{\Delta t} + \nu A & B^{\top} & C(t_n)^{\top}\\[6pt]
 B & -\varepsilon L & 0\\[4pt]
@@ -205,7 +207,7 @@ C(t_n) & 0 & 0
 \begin{bmatrix} u^n\\ p^n\\ \lambda^n \end{bmatrix}
 \;=\;
 \begin{bmatrix} \dfrac{M}{\Delta t}\,u^{n-1} + M f^n\\[6pt] 0\\[4pt] g(t_n) \end{bmatrix}.
-$$
+```
 
 **Matrix properties (with justification).**
 
@@ -229,11 +231,11 @@ The implicit time integrator turns the single PDE into a **sequence of linear
 systems** — one indefinite KKT solve per step. The driver loops
 (`solve_stokes_immersed`):
 
-$$
+```math
 \text{for } n = 1,\dots,T_\text{step}-1:\quad
 \text{solve } \mathcal{K}(t_n)\,x^n = b^n,\quad
 \text{then advance } u^{n-1} \leftarrow u^n .
-$$
+```
 
 **What stays constant** (assembled exactly once, before the loop):
 
@@ -288,15 +290,16 @@ systems:
 1. **backslash** ($\mathcal{K}\backslash b$, sparse LU) — ground truth, and the
    solution used to advance the state;
 2. **MINRES, unpreconditioned**;
-3. **MINRES with an SPD block-diagonal preconditioner**
+3. **MINRES with an SPD block-diagonal preconditioner** $P$ (defined below).
 
-   $$
-   P \;=\; \operatorname{blkdiag}\!\Big(\operatorname{ichol}\big(\tfrac{M}{\Delta t}+\nu A\big),\;\; \tfrac{1}{\nu}D,\;\; I_\lambda\Big),
-   $$
+The preconditioner is
 
-   the classic Stokes block preconditioner (velocity block + scaled pressure
-   mass; see Elman–Silvester–Wathen) extended with an identity block on the
-   multiplier.
+```math
+P \;=\; \operatorname{blkdiag}\!\Big(\operatorname{ichol}\big(\tfrac{M}{\Delta t}+\nu A\big),\;\; \tfrac{1}{\nu}D,\;\; I_\lambda\Big),
+```
+
+the classic Stokes block preconditioner (velocity block + scaled pressure mass;
+see Elman–Silvester–Wathen) extended with an identity block on the multiplier.
 
 Because the two nontrivial blocks of $P$ are built from the **time-constant**
 fluid operators, their factorizations are computed **once** and reused for every
