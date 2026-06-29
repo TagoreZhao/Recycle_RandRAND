@@ -341,7 +341,56 @@ checks of the assembled KKT matrix:
 - **Coupling change**: median per-step change $\geq 0.02$ for `bar_rotating`,
   confirming the stress case actually stresses the coupling.
 
-## 10. References
+## 10. Benchmark structure
+
+`run_benchmark.m` is the driver. It builds the channel mesh once, then for each
+motion case (`define_motion_list.m`) calls the engine
+`+src/+stokes/solve_stokes_immersed.m`, which time-steps the KKT system and, per
+step, solves it by backslash (ground truth) and by MINRES for every entry of the
+**solver registry** `define_solver_list.m`. Output mirrors
+`report/naca0012/benchmark_final` and is written to `benchmark_final/`
+(git-ignored, regenerated on run):
+
+```
+benchmark_final/
+  all_results.csv              one row per (case, time step); <key>_its / <key>_flag
+                               columns per solver, plus relres, diffF (coupling
+                               change), backslash_relres, constraint_res, nC
+  speedup_summary.csv          per-case max iteration diff & factor vs the
+                               unpreconditioned baseline
+  paper_summary_table.csv      per-(geometry, case) mean/std iterations + max factor
+  run_config.{mat,json}        params, case list, solver keys/labels
+  iteration_vs_timestep/<case>.png      all solvers, iterations vs time step
+  summary_plots/all_cases_comparison.png
+  <case>/
+    <key>_solver_iterations.{csv,png}   per-solver series
+    all_solvers_comparison.png
+    relative_step_to_step_change.png    per-step ||ΔC||_F/||C||_F
+    accuracy.png                        error vs backslash + constraint residual
+    coefficient_movie/                  (stress case only)
+```
+
+A fast end-to-end check runs with `SMOKE_TEST = true; run_benchmark` (single
+stress case, 2 steps).
+
+### Adding a preconditioner
+
+The solver set is the one extensibility seam. Append a struct to
+`define_solver_list.m`:
+
+```matlab
+solvers{end+1} = struct( ...
+    'key',   'my_precond', ...                 % CSV column + file name stem
+    'label', 'MINRES (my preconditioner)', ... % plot legend
+    'build', @(pc) @(r) my_apply(r, pc));      % [] for an unpreconditioned solve
+```
+
+`pc` carries the reusable, time-constant ingredients the engine builds once
+(`pc.Lc`, `pc.Rp`, `pc.nu`, `pc.nU`, `pc.nP`) plus the per-step `pc.nC`. Nothing
+else changes: the CSV columns, per-solver plots, comparison plots, speedup
+summary and paper table all discover the new solver automatically.
+
+## 11. References
 
 - deal.II **step-70**, *A fluid structure interaction problem on fully
   distributed non-matching grids* —

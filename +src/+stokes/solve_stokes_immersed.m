@@ -12,10 +12,11 @@ function Astat = solve_stokes_immersed(cfg, params, save_dir)
 %       [ B             , -eps*L,   0     ] [p  ] = [ 0                     ]
 %       [ C(t_n)        ,  0   ,   0      ] [lam]   [ g(t_n)                ]
 %   symmetric (transpose-paired off-diagonals) and indefinite (zero (lam,lam)
-%   block + negative -eps*L).  It is solved three ways per step:
-%     (1) backslash  (ground truth, also advances the state),
-%     (2) MINRES, unpreconditioned,
-%     (3) MINRES with an SPD block-diagonal preconditioner
+%   block + negative -eps*L).  Per step it is solved by:
+%     (1) backslash  (ground truth, also advances the state), and
+%     (2) MINRES for each solver in the registry params.solvers (cell array
+%         from define_solver_list): the unpreconditioned solve and one or more
+%         SPD-preconditioned solves, e.g. the block-diagonal "block Jacobi"
 %         P = blkdiag(ichol(Avel), Dp/nu, I_lam).
 %   The PCG/ICHOL/AMG/deflation zoo used by solve_deflate_M_P does NOT apply
 %   here — the matrix is indefinite.
@@ -37,14 +38,17 @@ function Astat = solve_stokes_immersed(cfg, params, save_dir)
 %     cfg.u0          - 2N x 1 initial velocity (default 0)
 %     cfg.case_name, cfg.geometry - labels
 %
-%   params: .dt, .Tstep, .SOLVER_TOL, .SOLVER_MAXIT
+%   params: .dt, .Tstep, .SOLVER_TOL, .SOLVER_MAXIT, optional .solvers
+%           (solver registry cell array; defaults to define_solver_list's two
+%            built-ins if absent).
 %
-%   Returns Astat with (Tstep-1)x1 per-step arrays:
-%     .minres_unprec_its, .minres_blk_its
-%     .minres_unprec_flag, .minres_blk_flag
-%     .minres_unprec_relres, .minres_blk_relres
-%     .backslash_relres      (||K x - b|| / ||b||)
-%     .minres_blk_err        (||x_blk - x_ref|| / ||x_ref||)
+%   Returns Astat with (Tstep-1)x1 per-step arrays, keyed by solver:
+%     .solver_keys, .solver_labels  - ordered ids/labels from the registry
+%     .solver_its.(key)             - MINRES iterations
+%     .solver_flag.(key)            - MINRES convergence flag
+%     .solver_relres.(key)          - MINRES relative residual
+%     .solver_err.(key)             - ||x_solver - x_ref|| / ||x_ref||
+%     .backslash_relres      (||K x - b|| / ||b||, ground truth)
 %     .constraint_res        (||C u - g|| / ||g||, ground-truth solution)
 %     .coupling_change       (||C(t_n) - C(t_{n-1})||_F / ||C(t_{n-1})||_F)
 %     .sys_size, .nC
@@ -117,17 +121,36 @@ function Astat = solve_stokes_immersed(cfg, params, save_dir)
     Lc = ichol(Au_bc, struct('type', 'nofill'));      % SPD
     Rp = chol((Dp + Dp') / 2);                         % pressure mass factor
 
+    % --- Solver registry (extensible; one MINRES solve per entry) ------------
+    if isfield(params, 'solvers') && ~isempty(params.solvers)
+        solvers = params.solvers;
+    else
+        solvers = default_solver_list();
+    end
+    nsolv      = numel(solvers);
+    solver_keys   = cellfun(@(s) s.key,   solvers, 'UniformOutput', false);
+    solver_labels = cellfun(@(s) s.label, solvers, 'UniformOutput', false);
+
+    % Reusable preconditioner context (constant pieces filled once; nC per step)
+    pc = struct('Lc', Lc, 'Rp', Rp, 'nu', nu, 'nU', nU, 'nP', nP, 'nC', 0);
+
     nsteps = Tstep - 1;
     Z = @(a, b) sparse(a, b);
 
-    Astat.minres_unprec_its    = zeros(nsteps, 1);
-    Astat.minres_blk_its       = zeros(nsteps, 1);
-    Astat.minres_unprec_flag   = zeros(nsteps, 1);
-    Astat.minres_blk_flag      = zeros(nsteps, 1);
-    Astat.minres_unprec_relres = zeros(nsteps, 1);
-    Astat.minres_blk_relres    = zeros(nsteps, 1);
+    Astat.solver_keys   = solver_keys(:);
+    Astat.solver_labels = solver_labels(:);
+    Astat.solver_its    = struct();
+    Astat.solver_flag   = struct();
+    Astat.solver_relres = struct();
+    Astat.solver_err    = struct();
+    for s = 1:nsolv
+        k = solver_keys{s};
+        Astat.solver_its.(k)    = zeros(nsteps, 1);
+        Astat.solver_flag.(k)   = zeros(nsteps, 1);
+        Astat.solver_relres.(k) = zeros(nsteps, 1);
+        Astat.solver_err.(k)    = zeros(nsteps, 1);
+    end
     Astat.backslash_relres     = zeros(nsteps, 1);
-    Astat.minres_blk_err       = zeros(nsteps, 1);
     Astat.constraint_res       = zeros(nsteps, 1);
     Astat.coupling_change      = nan(nsteps, 1);
     Astat.sys_size             = zeros(nsteps, 1);
@@ -179,20 +202,24 @@ function Astat = solve_stokes_immersed(cfg, params, save_dir)
         x_ref = K \ b;
         Astat.backslash_relres(n) = norm(K * x_ref - b) / max(norm(b), eps);
 
-        % --- (2) MINRES unpreconditioned ---
-        mit = min(maxit, ntot);
-        [~, fl_u, rr_u, it_u] = minres(K, b, tol, mit);
-        Astat.minres_unprec_flag(n)   = fl_u;
-        Astat.minres_unprec_relres(n) = rr_u;
-        Astat.minres_unprec_its(n)    = it_u;
-
-        % --- (3) MINRES + SPD block-diagonal preconditioner ---
-        Papply = @(r) block_precond(r, nU, nP, nC, Lc, Rp, nu);
-        [x_b, fl_b, rr_b, it_b] = minres(K, b, tol, mit, Papply);
-        Astat.minres_blk_flag(n)   = fl_b;
-        Astat.minres_blk_relres(n) = rr_b;
-        Astat.minres_blk_its(n)    = it_b;
-        Astat.minres_blk_err(n)    = norm(x_b - x_ref) / max(norm(x_ref), eps);
+        % --- (2) MINRES for each registered solver ---
+        mit    = min(maxit, ntot);
+        pc.nC  = nC;
+        it_last = NaN; rr_last = NaN; err_last = NaN;   % for the progress print
+        for s = 1:nsolv
+            Papply = solvers{s}.build(pc);              % [] -> unpreconditioned
+            if isempty(Papply)
+                [x_s, fl_s, rr_s, it_s] = minres(K, b, tol, mit);
+            else
+                [x_s, fl_s, rr_s, it_s] = minres(K, b, tol, mit, Papply);
+            end
+            k = solver_keys{s};
+            Astat.solver_flag.(k)(n)   = fl_s;
+            Astat.solver_relres.(k)(n) = rr_s;
+            Astat.solver_its.(k)(n)    = it_s;
+            Astat.solver_err.(k)(n)    = norm(x_s - x_ref) / max(norm(x_ref), eps);
+            it_last = it_s; rr_last = rr_s; err_last = Astat.solver_err.(k)(n);
+        end
 
         % --- Constraint satisfaction of the ground-truth solution ---
         u_ref = x_ref(1:nU);
@@ -210,9 +237,9 @@ function Astat = solve_stokes_immersed(cfg, params, save_dir)
         u_prev = u_ref;
 
         if mod(n, max(1, round(nsteps/5))) == 0 || n == nsteps
-            fprintf('  [%s] step %3d/%d  nC=%4d  MINRES(blk)=%4d its  rr=%.1e  err=%.1e\n', ...
-                getfield_default(cfg,'case_name','stokes'), n, nsteps, nC, it_b, rr_b, ...
-                Astat.minres_blk_err(n));
+            fprintf('  [%s] step %3d/%d  nC=%4d  MINRES(%s)=%4d its  rr=%.1e  err=%.1e\n', ...
+                getfield_default(cfg,'case_name','stokes'), n, nsteps, nC, ...
+                solver_keys{end}, it_last, rr_last, err_last);
         end
     end
 
@@ -224,6 +251,19 @@ function Astat = solve_stokes_immersed(cfg, params, save_dir)
     if ~isempty(save_dir)
         if ~exist(save_dir, 'dir'), mkdir(save_dir); end
     end
+end
+
+% -------------------------------------------------------------------------
+function solvers = default_solver_list()
+%DEFAULT_SOLVER_LIST  Fallback registry so the engine runs standalone when the
+% caller does not supply params.solvers.  Mirrors the benchmark-local
+% define_solver_list (unpreconditioned + block Jacobi).
+    solvers = { ...
+        struct('key', 'minres_unprec', 'label', 'MINRES (unpreconditioned)', ...
+               'build', @(pc) []), ...
+        struct('key', 'block_jacobi',  'label', 'MINRES (block Jacobi)', ...
+               'build', @(pc) @(r) block_precond(r, pc.nU, pc.nP, pc.nC, pc.Lc, pc.Rp, pc.nu)) };
+    solvers = solvers(:);
 end
 
 % -------------------------------------------------------------------------
