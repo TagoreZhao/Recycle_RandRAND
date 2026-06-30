@@ -33,7 +33,8 @@ function P = make_ildl_precond(A, opts)
 %     .nnzL .fill_ratio               diagnostics (vs nnz(tril(A)))
 %     .mode .droptol
 %
-%   See also: ldl, minres, test_ildl_minres, make_ildl_precond>abs_block_diag.
+%   See also: ldl, minres, src.precond.deflation_P_apply_indef,
+%   test_ildl_minres, make_ildl_precond>abs_block_diag.
 
     if nargin < 2 || isempty(opts), opts = struct(); end
     if ~isfield(opts, 'mode')    || isempty(opts.mode),    opts.mode    = 'nofill'; end
@@ -87,14 +88,14 @@ end
 %  Helpers
 %==========================================================================
 function y = scatter_fwd(x, p)
-%SCATTER_FWD  Forward permutation y = P x = x(p).
-    y = x(p);
+%SCATTER_FWD  Forward permutation y = P x = x(p).  Block-aware (columns of x).
+    y = x(p, :);
 end
 
 function y = scatter_back(x, p, n)
-%SCATTER_BACK  Inverse permutation y = P^T x  (y(p) = x).
-    y = zeros(n, 1);
-    y(p) = x;
+%SCATTER_BACK  Inverse permutation y = P^T x  (y(p) = x).  Block-aware.
+    y = zeros(n, size(x, 2));
+    y(p, :) = x;
 end
 
 function [Dsqrt, Disqrt] = abs_block_diag(D)

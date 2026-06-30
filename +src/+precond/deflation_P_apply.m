@@ -65,19 +65,3 @@ function [Papply, E, decE] = deflation_P_apply(V, A, tau, output_type, RAND_EIGS
         end
     end
 end
-
-function AX = apply_A(A, X)
-    if isnumeric(A)
-        AX = A * X;
-        return;
-    end
-    try
-        AX = A(X);
-    catch
-        [n,m] = size(X);
-        AX = zeros(n,m, class(X));
-        for j = 1:m
-            AX(:,j) = A(X(:,j));
-        end
-    end
-end

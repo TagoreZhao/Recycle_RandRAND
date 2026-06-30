@@ -15,6 +15,9 @@
 clear; clc;
 thisFileDir = fileparts(mfilename('fullpath'));
 addpath(thisFileDir);
+repoRoot = fileparts(fileparts(thisFileDir));   % .../Recycle_RandRAND (for +src)
+addpath(repoRoot);
+import src.precond.*                             % make_ildl_precond
 rng(1);
 
 outDir = fullfile(thisFileDir, 'output');

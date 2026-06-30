@@ -1,6 +1,6 @@
 function [Papply, E, decE] = deflation_P_apply_indef(V, A, tau, output_type, RAND_EIGS)
 %DEFLATION_P_APPLY_INDEF  Two-level deflation preconditioner for symmetric
-% INDEFINITE systems (revisable copy of +src/+precond/deflation_P_apply).
+% INDEFINITE systems (indefinite sibling of src.precond.deflation_P_apply).
 %
 %   [Papply, E, decE] = DEFLATION_P_APPLY_INDEF(V, A, tau, output_type, RAND_EIGS)
 %
@@ -10,13 +10,14 @@ function [Papply, E, decE] = deflation_P_apply_indef(V, A, tau, output_type, RAN
 %
 %   applied as  PX = X - V(V'X) + tau * V (|E|^{-1} (V'X)).
 %
-%   DIFFERENCE FROM THE ORIGINAL: the original +src/+precond/deflation_P_apply
+%   DIFFERENCE FROM THE SPD SIBLING: src.precond.deflation_P_apply
 %   factors the coarse matrix E with chol, which REQUIRES E (hence A on span(V))
 %   to be SPD.  For a symmetric INDEFINITE A (e.g. a Stokes/KKT saddle-point
 %   system) E = V'AV is indefinite and chol fails.  Here we instead use the SPD
 %   inverse |E|^{-1}: eigendecompose E = W L W' and replace L by |L|, so
 %   |E|^{-1} = W |L|^{-1} W' is SPD.  This is the same |.|-via-eigenvalue trick
-%   used by make_ildl_precond>abs_block_diag for the |D| of an indefinite LDL^T.
+%   used by src.precond.make_ildl_precond>abs_block_diag for the |D| of an
+%   indefinite LDL^T.
 %
 %   Because |E|^{-1} is SPD and V is orthonormal, the returned operator P is
 %   SPD (P = I on range(V)^perp and P = tau|E|^{-1} on range(V), both SPD).
@@ -41,8 +42,8 @@ function [Papply, E, decE] = deflation_P_apply_indef(V, A, tau, output_type, RAN
 %     decE   - struct with fields E, W, absd (=|eig(E)|, floored), absEinv
 %              (@(y)->|E|^{-1} y) and Qabs (@(X)->V|E|^{-1}V' X).
 %
-%   See also: deflation_P_apply (original SPD version), make_ildl_precond,
-%   test_deflation_minres.
+%   See also: src.precond.deflation_P_apply (SPD version),
+%   src.precond.make_ildl_precond, test_deflation_minres.
 
     if nargin < 3 || isempty(tau), tau = 1; end
     if tau <= 0, error('tau must be positive.'); end
@@ -89,21 +90,5 @@ function [Papply, E, decE] = deflation_P_apply_indef(V, A, tau, output_type, RAN
     else
         n = size(V, 1);
         Papply = eye(n) - V*V' + tau * (V * (W * diag(1./absd) * W') * V');
-    end
-end
-
-function AX = apply_A(A, X)
-    if isnumeric(A)
-        AX = A * X;
-        return;
-    end
-    try
-        AX = A(X);
-    catch
-        [n,m] = size(X);
-        AX = zeros(n,m, class(X));
-        for j = 1:m
-            AX(:,j) = A(X(:,j));
-        end
     end
 end

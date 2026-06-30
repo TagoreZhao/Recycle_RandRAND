@@ -284,13 +284,15 @@ around it.
 
 ## 7. Solver and preconditioner
 
-Each step is solved **three ways** so the methods can be compared on identical
-systems:
+Each step is solved by **backslash** ($\mathcal{K}\backslash b$, sparse LU) for
+the ground truth (and to advance the state), and by **MINRES for every entry of
+the solver registry** so the preconditioners are compared on identical systems.
+The baseline registry is:
 
-1. **backslash** ($\mathcal{K}\backslash b$, sparse LU) — ground truth, and the
-   solution used to advance the state;
-2. **MINRES, unpreconditioned**;
-3. **MINRES with an SPD block-diagonal preconditioner** $P$ (defined below).
+1. **MINRES, unpreconditioned**;
+2. **MINRES with an SPD block-diagonal preconditioner** $P$ (defined below);
+
+plus the incomplete-LDL and two-level deflation families described next.
 
 The preconditioner is
 
@@ -309,6 +311,41 @@ MINRES, in contrast to the unpreconditioned curve that degrades as the solid
 moves into the shear layer. The gap between the two MINRES curves is the headline
 result, and the reuse of the factorizations across the moving sequence is exactly
 the recycling story this benchmark is built to expose.
+
+### Incomplete-LDL and two-level deflation
+
+Two stronger families are also registered, the indefinite-system analogs of the
+SPD `report/solve_deflate_M_P` scheme (ICHOL→ILDL, PCG→MINRES):
+
+- **Incomplete-LDL (`ildl_nofill`)** — the indefinite analog of `ichol('nofill')`
+  (`make_ildl_precond`): an incomplete $LDL^\top$ of $\mathcal K$ with $|D|$
+  formed per 1×1/2×2 block so the smoother $M=CC^\top$ is SPD (a legal MINRES
+  preconditioner). It is run as a **split solve**: MINRES on
+  $\hat A = C^{-1}\mathcal K C^{-\top}$, recovering $x=C^{-\top}y$.
+
+- **Two-level deflation (`two_level_*`)** — the standard split form
+  $B=L^{-\top}PL^{-1}$ ($L=C$): MINRES on $\hat A$ with the indefinite deflation
+  projector $P_{\rm def}=(I-\hat V\hat V^\top)+\tau\,\hat V|\hat E|^{-1}\hat V^\top$
+  ($\hat E=\hat V^\top\hat A\hat V$, SPD-ified via $|\hat E|^{-1}$) as the inner
+  preconditioner. The coarse basis $\hat V$ (the near-zero-$|\lambda|$ modes of
+  $\hat A$ that stall MINRES) is built by one of four **V operations**, one solver
+  entry each (`build_deflation_V`):
+  - `exact` — generalized eig $\mathrm{eigs}(\mathcal K,M,\text{'smallestabs'})$;
+  - `gaussian` / `sjlt` — random sketch + power iteration on the exact inverse
+    $\hat A^{-1}=C^\top\mathcal K^{-1}C$ (one `decomposition(K)`);
+  - `polynomial` — matrix-free Chebyshev high-pass on the **squared** operator
+    $\hat A^2$ (whose spectrum is $\ge 0$, so the near-zero-$|\lambda|$ cluster maps
+    to the low end and is amplified), with a random start. The reject-band edge is
+    `lam_cut_frac`·$\max|\lambda(\hat A)|$; set it near $|\lambda_k|/\max|\lambda|$.
+
+These rebuild as the coupling $C(t_n)$ moves, under independent **refresh
+cadences** — one knob per preconditioner component, mirroring the report's
+`*_PREC_REFRESH` (default `Inf` = build once and **recycle** across the moving
+sequence; set to `N` to rebuild every `N` steps):
+`BLOCKJAC_PREC_REFRESH`, `ILDL_PREC_REFRESH`, `DEFLAT_PREC_REFRESH` (the basis
+$\hat V$), `DINVERSE_PREC_REFRESH` (the exact-inverse factor for sketched V).
+Recycling a frozen $\hat V$ is cheap but degrades as the solid moves — the
+trade-off this benchmark exists to measure.
 
 ## 8. Industrial applications
 
@@ -376,19 +413,35 @@ stress case, 2 steps).
 ### Adding a preconditioner
 
 The solver set is the one extensibility seam. Append a struct to
-`define_solver_list.m`:
+`define_solver_list.m`. An entry provides **either** a `.build` (a 5th-argument
+MINRES apply on $\mathcal K$) **or** a `.solve` (a self-contained solve, used by
+the split-operator two-level scheme):
 
 ```matlab
+% 5th-argument preconditioner apply:
 solvers{end+1} = struct( ...
     'key',   'my_precond', ...                 % CSV column + file name stem
     'label', 'MINRES (my preconditioner)', ... % plot legend
     'build', @(pc) @(r) my_apply(r, pc));      % [] for an unpreconditioned solve
+
+% self-contained solve (returns [x, flag, relres, iters]):
+solvers{end+1} = struct('key','my_solve', 'label','...', 'build',[], ...
+    'solve', @(K,b,tol,mit,pc) my_solver(K,b,tol,mit,pc));
 ```
 
-`pc` carries the reusable, time-constant ingredients the engine builds once
-(`pc.Lc`, `pc.Rp`, `pc.nu`, `pc.nU`, `pc.nP`) plus the per-step `pc.nC`. Nothing
-else changes: the CSV columns, per-solver plots, comparison plots, speedup
-summary and paper table all discover the new solver automatically.
+`pc` carries the reusable ingredients the engine fills:
+`pc.Lc`, `pc.Rp`, `pc.Au_bc` (block-Jacobi `ichol` source), `pc.nu`, `pc.nU`,
+`pc.nP`; the per-step `pc.nC`, `pc.K` (current KKT matrix) and `pc.step`; and
+`pc.cache`, a per-case `containers.Map` for caching/refreshing factorizations.
+
+The `cached(pc, key, refresh, @() build())` helper builds a factor at most once
+per step on a `mod(step-1, refresh)==0` cadence (shared keys reused across solver
+entries within a step), so a preconditioner can be given its own
+`*_PREC_REFRESH` knob (set in `run_benchmark.m`, `Inf` = build once). Add a new
+**V-building operation** by adding a `case` to `build_deflation_V.m`.
+
+Nothing else changes: the CSV columns, per-solver plots, comparison plots,
+speedup summary and paper table all discover the new solver automatically.
 
 ## 11. References
 

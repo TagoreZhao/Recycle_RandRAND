@@ -92,19 +92,3 @@ function [Psqrt_apply, E, decE] = deflation_Psqrt_apply(V, A, tau, output_type)
         Psqrt_apply = eye(n_rows) - V*V' + sqtau * V * E_inv_half * V';
     end
 end
-
-function AX = apply_A(A, X)
-    if isnumeric(A)
-        AX = A * X;
-        return;
-    end
-    try
-        AX = A(X);
-    catch
-        [n,m] = size(X);
-        AX = zeros(n,m, class(X));
-        for j = 1:m
-            AX(:,j) = A(X(:,j));
-        end
-    end
-end

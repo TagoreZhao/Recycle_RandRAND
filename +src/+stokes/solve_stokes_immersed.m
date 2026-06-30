@@ -131,8 +131,13 @@ function Astat = solve_stokes_immersed(cfg, params, save_dir)
     solver_keys   = cellfun(@(s) s.key,   solvers, 'UniformOutput', false);
     solver_labels = cellfun(@(s) s.label, solvers, 'UniformOutput', false);
 
-    % Reusable preconditioner context (constant pieces filled once; nC per step)
-    pc = struct('Lc', Lc, 'Rp', Rp, 'nu', nu, 'nU', nU, 'nP', nP, 'nC', 0);
+    % Reusable preconditioner context (constant pieces filled once; nC/K/step per
+    % step).  Au_bc is exposed so the block-Jacobi ichol factor can be rebuilt on
+    % its own refresh cadence; pc.cache is a per-case handle store that lets the
+    % per-step build/solve closures cache (and refresh) factorizations.
+    pc = struct('Lc', Lc, 'Rp', Rp, 'nu', nu, 'nU', nU, 'nP', nP, 'nC', 0, ...
+                'K', [], 'step', 0, 'Au_bc', Au_bc);
+    pc.cache = containers.Map('KeyType', 'char', 'ValueType', 'any');
 
     nsteps = Tstep - 1;
     Z = @(a, b) sparse(a, b);
@@ -205,13 +210,21 @@ function Astat = solve_stokes_immersed(cfg, params, save_dir)
         % --- (2) MINRES for each registered solver ---
         mit    = min(maxit, ntot);
         pc.nC  = nC;
+        pc.K   = K;
+        pc.step = n;
         it_last = NaN; rr_last = NaN; err_last = NaN;   % for the progress print
         for s = 1:nsolv
-            Papply = solvers{s}.build(pc);              % [] -> unpreconditioned
-            if isempty(Papply)
-                [x_s, fl_s, rr_s, it_s] = minres(K, b, tol, mit);
+            s_entry = solvers{s};
+            if isfield(s_entry, 'solve') && ~isempty(s_entry.solve)
+                % Self-contained solve (e.g. split-operator two-level scheme).
+                [x_s, fl_s, rr_s, it_s] = s_entry.solve(K, b, tol, mit, pc);
             else
-                [x_s, fl_s, rr_s, it_s] = minres(K, b, tol, mit, Papply);
+                Papply = s_entry.build(pc);             % [] -> unpreconditioned
+                if isempty(Papply)
+                    [x_s, fl_s, rr_s, it_s] = minres(K, b, tol, mit);
+                else
+                    [x_s, fl_s, rr_s, it_s] = minres(K, b, tol, mit, Papply);
+                end
             end
             k = solver_keys{s};
             Astat.solver_flag.(k)(n)   = fl_s;

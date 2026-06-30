@@ -28,7 +28,7 @@ clear; clc;
 thisFileDir = fileparts(mfilename('fullpath'));
 addpath(thisFileDir);
 repoRoot = fileparts(fileparts(thisFileDir));   % .../Recycle_RandRAND (for +src)
-addpath(repoRoot);
+addpath(repoRoot);                              % +src on path for src.precond.*
 rng(1);
 
 outDir = fullfile(thisFileDir, 'output');
@@ -52,7 +52,7 @@ tau   = 1;         % multiplicative coarse-correction weight
 x_ref = A \ b;
 
 % ---- ILDL smoother M = C C' (rebuild C explicitly, cf. plot_eigenspectrum) -
-P    = make_ildl_precond(A, struct('mode', 'nofill'));
+P    = src.precond.make_ildl_precond(A, struct('mode', 'nofill'));
 Sinv = spdiags(1 ./ P.s, 0, n, n);
 Pt   = sparse(P.p, (1:n)', 1, n, n);          % P^T
 C    = Sinv * Pt * P.L * P.Dsqrt;             % M = C C'
@@ -171,7 +171,7 @@ end
 
 function res = run_both(Afun, btil, tol, maxit, P, A, b, V, tau)
 %RUN_BOTH  Additive (I+Qhat) and multiplicative ((I-VV')+tau Qhat) for one V.
-    [Pdef, ~, decE] = deflation_P_apply_indef(V, Afun, tau, 'handle', 0);
+    [Pdef, ~, decE] = src.precond.deflation_P_apply_indef(V, Afun, tau, 'handle', 0);
     Gadd  = @(r) r + decE.Qabs(r);
     Gmult = @(r) Pdef(r);
 
