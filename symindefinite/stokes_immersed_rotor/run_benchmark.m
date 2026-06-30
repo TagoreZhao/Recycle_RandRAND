@@ -49,8 +49,8 @@ params.DINVERSE_PREC_REFRESH = Inf;   % exact A^{-1} factor (sketched V methods)
 % Two-level / deflation method parameters (shared by all two-level V methods;
 % consumed by define_solver_list -> build_deflation_V).  Defaults mirror
 % report/ball_surface/run_benchmark.m.
-params.DEFLAT_SM_EIG       = 500;       % # smallest-|lambda| deflation vectors (report sm_eig)
-params.DEFLAT_LG_EIG       = 0;         % # largest-|lambda| deflation vectors (report lg_eig; 0=off)
+params.DEFLAT_SM_EIG       = 0;       % # smallest-|lambda| deflation vectors (report sm_eig)
+params.DEFLAT_LG_EIG       = 500;         % # largest-|lambda| deflation vectors (report lg_eig; 0=off)
 params.DEFLAT_Q            = 2;         % sketch power-iteration rounds (gaussian/sjlt V)
 params.DEFLAT_TAU          = 0.5;       % deflation coarse-correction weight tau
 params.DEFLAT_CHEB_DEGREE  = 4;         % Chebyshev degree (polynomial V; exact eigs band)
@@ -102,7 +102,7 @@ if evalin('base', 'exist(''SMOKE_TEST'',''var'') && logical(SMOKE_TEST)')
     case_names = case_names(1);   % single (stress) case
 end
 
-results_root = fullfile(thisFileDir, 'benchmark_final');
+results_root = fullfile(thisFileDir, 'benchmark_final_large');
 if ~exist(results_root, 'dir'), mkdir(results_root); end
 
 %% ===================== 4. Loop over cases =================================
@@ -174,7 +174,7 @@ fid = fopen(fullfile(results_root, 'run_config.json'), 'w');
 if fid > 0, fwrite(fid, jstr); fclose(fid); end
 
 % --- per-(geometry,case) paper summary table ---
-make_paper_summary_table;
+make_paper_summary_table(results_root);
 
 fprintf('\n[stokes_immersed_rotor] done. Output in %s\n', results_root);
 

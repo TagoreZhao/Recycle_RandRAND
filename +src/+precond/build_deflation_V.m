@@ -18,8 +18,9 @@ function V = build_deflation_V(A, P, opts, dA)
 %         raw factors .L, .s, .p, .Dsqrt used to rebuild C = S^-1 P^T L Dsqrt.
 %   opts  struct:
 %           .method        'exact' | 'gaussian' | 'sjlt' | 'polynomial'
-%           .sm_eig        # smallest-|lambda| deflation vectors  (>= 1)
+%           .sm_eig        # smallest-|lambda| deflation vectors  (>= 0, default 0)
 %           .lg_eig        # largest-|lambda|  deflation vectors  (>= 0, default 0)
+%                          (require sm_eig + lg_eig >= 1)
 %           .q             sketch power-iteration steps           (default 2)
 %           .cheb_degree   Chebyshev degree, 'polynomial'         (default 12)
 %   dA    optional precomputed decomposition(A) reused by the inverse-power
@@ -55,15 +56,17 @@ function V = build_deflation_V(A, P, opts, dA)
     if ~isfield(opts, 'method') || isempty(opts.method)
         error('build_deflation_V:noMethod', 'opts.method is required.');
     end
-    if ~isfield(opts, 'sm_eig') || isempty(opts.sm_eig) || opts.sm_eig < 1
-        error('build_deflation_V:badSmEig', 'opts.sm_eig (>=1) is required.');
-    end
     n      = size(A, 1);
     method = opts.method;
-    sm     = opts.sm_eig;
+    sm     = getfield_default(opts, 'sm_eig', 0);
     lg     = getfield_default(opts, 'lg_eig', 0);
     q      = getfield_default(opts, 'q', 2);
+    if sm < 0, error('build_deflation_V:badSmEig', 'opts.sm_eig must be >= 0.'); end
     if lg < 0, error('build_deflation_V:badLgEig', 'opts.lg_eig must be >= 0.'); end
+    if sm + lg < 1
+        error('build_deflation_V:noVectors', ...
+              'need sm_eig + lg_eig >= 1 (got sm_eig=%d, lg_eig=%d).', sm, lg);
+    end
 
     % Explicit factor C (M = C C') is used by every method: the eig methods
     % ('exact', and the exact-band 'polynomial') form M = C C', and the
@@ -74,47 +77,59 @@ function V = build_deflation_V(A, P, opts, dA)
     M    = [];   % built lazily by the eig methods (shared by small + large)
 
     % ---- small basis: the sm smallest-|lambda| modes ----------------------
-    switch method
-        case 'exact'
-            M = C * C';  M = (M + M') / 2;
-            [Us, ~] = eigs(A, M, sm, 'smallestabs', ...
-                           struct('tol', 1e-6, 'maxit', 1000));
-            Vs = C' * Us;
+    % Skipped entirely for the large-only ablation (sm == 0): the eig methods
+    % would call eigs(...,0,...) and the sjlt start block sjlt(n,0,...) errors,
+    % and the polynomial high-pass is a small-mode filter with nothing to target.
+    if sm >= 1
+        switch method
+            case 'exact'
+                M = C * C';  M = (M + M') / 2;
+                [Us, ~] = eigs(A, M, sm, 'smallestabs', ...
+                               struct('tol', 1e-6, 'maxit', 1000));
+                Vs = C' * Us;
 
-        case {'gaussian', 'sjlt'}
-            if nargin < 4 || isempty(dA)
-                dA = decomposition(A);                % exact A^-1 factorization
-            end
-            AinvFun = @(Y) C' * (dA \ (C * Y));       % Ahat^-1 = C' A^-1 C
-            Vs = subspace_iter_plain(AinvFun, start_block(method, n, sm), q);
+            case {'gaussian', 'sjlt'}
+                if nargin < 4 || isempty(dA)
+                    dA = decomposition(A);                % exact A^-1 factorization
+                end
+                AinvFun = @(Y) C' * (dA \ (C * Y));       % Ahat^-1 = C' A^-1 C
+                Vs = subspace_iter_plain(AinvFun, start_block(method, n, sm), q);
 
-        case 'polynomial'
-            % Exact Chebyshev reject band from the (A,M) generalized spectrum
-            % (report-style; (A,M) shares the spectrum of Ahat = C^-1 A C^-T):
-            %   lower edge = |lambda_{sm+1}|  (just above the sm-mode cluster)
-            %   upper edge = max|lambda(Ahat)|
-            % on the SQUARED operator Ahat^2 (eigenvalues lambda^2 >= 0), so the
-            % high-pass damps the bulk [lo,hi] and amplifies lambda^2 < lo, i.e.
-            % the sm smallest-|lambda| deflation targets.
-            M  = C * C';  M = (M + M') / 2;
-            eo = struct('tol', 1e-6, 'maxit', 1000);
-            dlo     = eigs(A, M, sm + 1, 'smallestabs', eo);   % sm+1 smallest |lambda|
-            lam_cut = max(abs(real(dlo)));                     % (sm+1)-th smallest = cluster edge
-            lam_max = abs(real(eigs(A, M, 1, 'largestabs', eo)));
-            Ahat  = @(Y) P.applyCinv(A * P.applyCtinv(Y));
-            Ahat2 = @(Y) Ahat(Ahat(Y));
-            lo    = lam_cut^2;  hi = lam_max^2;                % exact reject band on Ahat^2
-            deg   = getfield_default(opts, 'cheb_degree', 12);
-            Vs = chebyshev_apply(Ahat2, randn(n, sm), deg, lo, hi);
+            case 'polynomial'
+                % Exact Chebyshev reject band from the (A,M) generalized spectrum
+                % (report-style; (A,M) shares the spectrum of Ahat = C^-1 A C^-T):
+                %   lower edge = |lambda_{sm+1}|  (just above the sm-mode cluster)
+                %   upper edge = max|lambda(Ahat)|
+                % on the SQUARED operator Ahat^2 (eigenvalues lambda^2 >= 0), so the
+                % high-pass damps the bulk [lo,hi] and amplifies lambda^2 < lo, i.e.
+                % the sm smallest-|lambda| deflation targets.
+                M  = C * C';  M = (M + M') / 2;
+                eo = struct('tol', 1e-6, 'maxit', 1000);
+                dlo     = eigs(A, M, sm + 1, 'smallestabs', eo);   % sm+1 smallest |lambda|
+                lam_cut = max(abs(real(dlo)));                     % (sm+1)-th smallest = cluster edge
+                lam_max = abs(real(eigs(A, M, 1, 'largestabs', eo)));
+                Ahat  = @(Y) P.applyCinv(A * P.applyCtinv(Y));
+                Ahat2 = @(Y) Ahat(Ahat(Y));
+                lo    = lam_cut^2;  hi = lam_max^2;                % exact reject band on Ahat^2
+                deg   = getfield_default(opts, 'cheb_degree', 12);
+                Vs = chebyshev_apply(Ahat2, randn(n, sm), deg, lo, hi);
 
-        otherwise
+            otherwise
+                error('build_deflation_V:unknownMethod', ...
+                      'unknown method ''%s''', method);
+        end
+    else
+        if ~any(strcmp(method, {'exact', 'gaussian', 'sjlt', 'polynomial'}))
             error('build_deflation_V:unknownMethod', ...
                   'unknown method ''%s''', method);
+        end
+        Vs = zeros(n, 0);                 % large-only ablation: no small modes
     end
 
     % ---- large basis: the lg largest-|lambda| modes (optional) ------------
     if lg > 0
         if strcmp(method, 'exact')
+            if isempty(M), M = C * C';  M = (M + M') / 2; end   % needed by eigs(A,M,...)
             [Ul, ~] = eigs(A, M, lg, 'largestabs', ...
                            struct('tol', 1e-6, 'maxit', 1000));
             Vl = C' * Ul;

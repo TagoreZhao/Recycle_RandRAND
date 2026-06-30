@@ -1,12 +1,19 @@
-function make_paper_summary_table()
+function make_paper_summary_table(results_root)
 %MAKE_PAPER_SUMMARY_TABLE  Per-(geometry,motion-case) paper summary from
-% benchmark_final/all_results.csv.  Solver columns are discovered from the CSV
+% <results_root>/all_results.csv.  Solver columns are discovered from the CSV
 % (any "<key>_its" column), so the table extends automatically as preconditioners
 % are added to define_solver_list.  Reports mean/std iterations per solver and,
 % relative to the unpreconditioned baseline, the max per-step speedup factor.
+%
+%   results_root  (optional) output directory holding all_results.csv; defaults
+%                 to <thisDir>/benchmark_final.  run_benchmark passes its own
+%                 results_root so the summary tracks redirected output dirs.
     here    = fileparts(mfilename('fullpath'));
-    in_csv  = fullfile(here, 'benchmark_final', 'all_results.csv');
-    out_csv = fullfile(here, 'benchmark_final', 'paper_summary_table.csv');
+    if nargin < 1 || isempty(results_root)
+        results_root = fullfile(here, 'benchmark_final');
+    end
+    in_csv  = fullfile(results_root, 'all_results.csv');
+    out_csv = fullfile(results_root, 'paper_summary_table.csv');
 
     T  = readtable(in_csv);
     vn = T.Properties.VariableNames;

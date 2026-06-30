@@ -141,7 +141,9 @@ function [x, fl, rr, it] = tl_solve(K, b, tol, mit, pc, method, opts, R_ildl, R_
         V = [];
     else
         dA = [];
-        if any(strcmp(method, {'gaussian', 'sjlt'}))   % only inverse-power needs a factor
+        % Only the smallest-mode inverse-power sketch needs A^-1; the large-only
+        % ablation (sm_eig=0) sketches the forward operator Ahat, so skip it then.
+        if any(strcmp(method, {'gaussian', 'sjlt'})) && opts.sm_eig >= 1
             dA = cached(pc, 'dinv', R_dinv, @() decomposition(K));
         end
         o = opts;  o.method = method;
