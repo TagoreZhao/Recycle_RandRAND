@@ -125,6 +125,43 @@ Both two-level methods give a ~5× iteration reduction at `k=250` and track each
 other across `k`; `τ=1` is optimal for the multiplicative form (`τ=0.5` is
 slightly worse, `τ=2` ≈ `τ=1`). See `output/two_level_minres_convergence.png`.
 
+### Exact vs sketched coarse space
+
+`test_two_level_sketched.m` repeats the comparison with two coarse spaces of the
+same size `k`, side by side:
+
+- **exact** — `V̂ = qr(Cᵀ U)`, `U` from `eigs(A, M, k, 'smallestabs')`
+  (eigenvectors of `Â`).
+- **sketched** — `V̂ = qr( subspace_iter_plain(Â⁻¹, randn(n,k), q) )`, i.e. a
+  Gaussian test matrix pushed through `q` steps of **plain** power iteration on
+  the **exact inverse** `Â⁻¹ = Cᵀ A⁻¹ C` (one factorization `decomposition(A)`).
+  This reuses `src.precond.subspace_iter_plain` and mirrors the `re==1`
+  exact-inverse smallest-eigenvector path (`IcholinvApply`, Gaussian start) in
+  `+src/+solver/solve_deflate_M_P.m`. Power iteration on `Â⁻¹` targets the
+  smallest-|λ| (near-zero, both-sign) subspace of `Â`.
+
+The composition still does **not** matter much, even with an approximate coarse
+space: at every `q` the sketched additive and multiplicative iteration counts
+stay within a few iterations of each other (with `τ=1`, `B_mult − B_add = −ZZᵀ`,
+a rank-`k` term that barely moves convergence here). The dominant factor is the
+**subspace quality**, controlled by `q`:
+
+| q | sketched additive | sketched multiplicative | exact (both) |
+|---|---|---|---|
+| 0 | 1134 | 1116 | 62 |
+| 1 | 462 | 465 | 62 |
+| 2 | 214 | 211 | 62 |
+| 3 | 162 | 161 | 62 |
+| 5 | 105 | 103 | 62 |
+
+(`n≈5840`, `k=250`, `τ=1`; `q=0` is the raw Gaussian sketch.) The sketched coarse
+space approaches the exact baseline as `q` grows but does not reach it by `q=5`;
+additive and multiplicative track each other throughout. Note: **plain** (non-
+reorthogonalized) iteration loses numerical rank as `q` grows — a re-orthogonalized
+`subspace_iter` or a sketched-QR stabilization (as in the `+src` `re==2` path)
+would be needed to push `q` much higher. See
+`output/two_level_sketched_convergence.png`.
+
 ## Later: register in the benchmark
 
 To use this preconditioner inside `stokes_immersed_rotor`, append a solver entry
