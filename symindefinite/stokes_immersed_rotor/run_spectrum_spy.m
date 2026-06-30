@@ -256,7 +256,7 @@ function plot_spectrum_overlay(lam_raw, lam_pre, S, k, mode, POS, NEG, figPath)
     sign_semilogy(ax, lam_pre, POS, NEG, '--', 1.4);
 
     set(ax, 'YScale','log', 'FontSize', 12);
-    xlabel(ax, sprintf('sorted index i (1 \\rightarrow %d)', k), 'FontSize', 12);
+    xlabel(ax, sprintf('rank by |\\lambda| (largest \\rightarrow smallest, 1 \\rightarrow %d)', k), 'FontSize', 12);
     ylabel(ax, '|\lambda_i|   (log scale)', 'FontSize', 12);
     title(ax, sprintf('stokes\\_immersed\\_rotor  h0=%.4g  n=%d : %s %d eigenvalues', ...
           S.h0, S.n, mode, k), 'FontSize', 13);
@@ -306,7 +306,7 @@ function plot_meshrefine(raw_cell, pre_cell, h0_list, n_list, k, mode, ...
     end
 
     set(ax, 'YScale','log', 'FontSize', 12);
-    xlabel(ax, sprintf('sorted index i (1 \\rightarrow %d)', k), 'FontSize', 12);
+    xlabel(ax, sprintf('rank by |\\lambda| (largest \\rightarrow smallest, 1 \\rightarrow %d)', k), 'FontSize', 12);
     ylabel(ax, '|\lambda_i|   (log scale)', 'FontSize', 12);
     title(ax, sprintf('stokes\\_immersed\\_rotor : %s %d eigenvalues, mesh refinement', ...
           mode, k), 'FontSize', 13);
@@ -323,20 +323,25 @@ end
 
 % -------------------------------------------------------------------------
 function [hrep, hpos, hneg] = sign_semilogy(ax, lam, posColor, negColor, style, lw)
-%SIGN_SEMILOGY  Sort lambda ascending, plot |lambda| vs index; negatives in
-% negColor, positives in posColor.  Sorted ascending => negatives (descending
-% |.|) then positives (ascending |.|): a "V" whose floor is min|lambda|.
-% HREP is a guaranteed-valid handle (whichever sign is present) for legends.
-    lam = sort(lam(:), 'ascend');
+%SIGN_SEMILOGY  Rank lambda by DESCENDING |lambda| (rank 1 = largest magnitude),
+% plot |lambda| vs rank so the spectrum reads as a monotone decay curve;
+% negatives in negColor, positives in posColor.  Each sign is plotted against the
+% full rank axis with the other sign NaN-masked, so mixed-sign sets break cleanly
+% (no jagged cross-connectors).  HREP is a guaranteed-valid handle (whichever sign
+% is present) for legends.
+    [~, ord] = sort(abs(lam(:)), 'descend');                 % rank 1 = largest |lambda|
+    lam = lam(ord);
     av  = abs(lam);
     neg = lam < 0;  pos = ~neg;
     idx = (1:numel(lam))';
+    yneg = av;  yneg(pos) = NaN;                             % NaN-mask the other sign
+    ypos = av;  ypos(neg) = NaN;
     hneg = gobjects(1);  hpos = gobjects(1);                 % placeholders
     if any(neg)
-        hneg = semilogy(ax, idx(neg), av(neg), style, 'Color', negColor, 'LineWidth', lw);
+        hneg = semilogy(ax, idx, yneg, style, 'Color', negColor, 'LineWidth', lw);
     end
     if any(pos)
-        hpos = semilogy(ax, idx(pos), av(pos), style, 'Color', posColor, 'LineWidth', lw);
+        hpos = semilogy(ax, idx, ypos, style, 'Color', posColor, 'LineWidth', lw);
     end
     if isgraphics(hpos), hrep = hpos; else, hrep = hneg; end
 end

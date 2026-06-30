@@ -3,3 +3,7 @@ symindefinite/stokes_immersed_rotor/convergence_out/
 symindefinite/stokes_immersed_rotor/benchmark_final/
 symindefinite/stokes_immersed_rotor/test_tentative_approx/
 symindefinite/stokes_immersed_rotor/output/
+
+# linear_solves preconditioner test bed (regenerated on run)
+symindefinite/linear_solves/output/
+symindefinite/linear_solves/*.mat
