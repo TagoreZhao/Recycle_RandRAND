@@ -24,7 +24,7 @@
 % span(V_true) into span(Q), computed by the local subspace_capture_directed.
 % Primary quantities: eigspace_err_2 = ||(I - QQ^T) Q_true||_2 (worst missed
 % direction) and angle_capture_frac_1pct (# directions with sin(theta) < 1e-2
-% over r_true).  The old per-column residuals are kept as CSV diagnostics.
+% over r_true).
 %
 % Sweep:
 %   Z       : { A,  T_sym = L^{-1} A L^{-T} }   (L = ichol(A,'nofill'))
@@ -562,17 +562,21 @@ function info = run_one(Zfun, P0, poly, i_deg, bnds, V_true)
         switch poly
             case 'chebyshev'
                 % Original high-pass T_i filter; reject band [lam_cut, lam_max].
-                Y = src.precond.chebyshev_apply(Zfun, P0, i_deg, ...
+                % Raw filtered block: the metric's pivoted QR is the single
+                % orthonormalization (with rank truncation).
+                Q = src.precond.chebyshev_apply(Zfun, P0, i_deg, ...
                                                 bnds.lam_cut, bnds.lam_max);
-                Q = orth(Y);
+                Q_is_orth = false;
             case 'power_iz'
                 Dinv = (1 / bnds.lam_max) * ones(n, 1);
+                % min_subspace_iter ends with orth(Y) => output orthonormal.
                 Q = src.precond.min_subspace_iter(Zfun, P0, i_deg, ...
                                                   Dinv, 1.0, false);
+                Q_is_orth = true;
             otherwise
                 error('run_one: unknown poly %s', poly);
         end
-        info = fill_capture_info(info, V_true, Q);
+        info = fill_capture_info(info, V_true, Q, Q_is_orth);
     catch ME
         info.err = regexprep(ME.message, '\n.*', '');
         warning('run_subspace_capture:run_one_failed', ...
@@ -596,9 +600,8 @@ function [info, dstar] = run_balanced_opt(Zfun, P0, bnds, V_true)
         filt = make_balanced_cheb_filter(bnds.lam_first, bnds.lam_max, ...
                     [bnds.lam_first, bnds.lam_cut], ...
                     'mode', 'left', 'damping', bnds.damping, 'phi', bnds.phi);
-        Y    = apply_cheb_filter(Zfun, P0, filt);
-        Q    = orth(Y);
-        info = fill_capture_info(info, V_true, Q);
+        Q    = apply_cheb_filter(Zfun, P0, filt);   % raw block; metric QRs it
+        info = fill_capture_info(info, V_true, Q, false);
         dstar = filt.k;
     catch ME
         info.err = regexprep(ME.message, '\n.*', '');
@@ -610,24 +613,22 @@ end
 
 function info = new_capture_info()
 %NEW_CAPTURE_INFO  Empty result struct shared by run_one / run_balanced_opt.
-%   Primary metrics are the basis-invariant directed principal-angle ones
-%   (eigspace_err_2 = ||(I - P_comp) Q_true||_2 etc.); the old per-column
-%   residual metrics are retained as diagnostics only.
+%   All metrics are the basis-invariant directed principal-angle ones
+%   (eigspace_err_2 = ||(I - P_comp) Q_true||_2 etc.).
     info = struct( ...
         'eigspace_err_2', NaN, 'eigspace_err_fro', NaN, ...
         'angle_capture_frac_1pct', NaN, ...
         'n_angle_below_1pct', NaN, 'n_angle_below_0p1pct', NaN, ...
         'r_true', NaN, 'r_comp', NaN, ...
-        'max_residual', NaN, 'mean_residual', NaN, ...
-        'n_res_below_1pct', NaN, 'n_res_below_0p1pct', NaN, ...
-        'capture_frac_1pct', NaN, 'max_principal_angle', NaN, ...
         'time_seconds', NaN, 'ok', false, 'err', '');
 end
 
-function info = fill_capture_info(info, V_true, Q)
+function info = fill_capture_info(info, V_true, Q, Q_is_orth)
 %FILL_CAPTURE_INFO  Populate capture metrics from a computed basis Q.
-    cap = subspace_capture_directed(V_true, Q);
-    % Basis-invariant directed principal-angle metrics (primary).
+%   V_true comes from eigs (symmetric problem) => orthonormal columns;
+%   Q_is_orth says whether Q is already orthonormal too.
+    capOpts = struct('true_is_orth', true, 'comp_is_orth', Q_is_orth);
+    cap = subspace_capture_directed(V_true, Q, [], capOpts);
     info.eigspace_err_2          = cap.eigspace_err_2;
     info.eigspace_err_fro        = cap.eigspace_err_fro;
     info.n_angle_below_1pct      = cap.n_angle_below_1pct;
@@ -635,37 +636,24 @@ function info = fill_capture_info(info, V_true, Q)
     info.angle_capture_frac_1pct = cap.n_angle_below_1pct / max(cap.r_true, 1);
     info.r_true                  = cap.r_true;
     info.r_comp                  = cap.r_comp;
-    % Old basis-dependent per-column metrics (diagnostics).
-    info.max_residual        = cap.max_residual;
-    info.mean_residual       = cap.mean_residual;
-    info.n_res_below_1pct    = cap.n_res_below_1pct;
-    info.n_res_below_0p1pct  = cap.n_res_below_0p1pct;
-    info.capture_frac_1pct   = cap.n_res_below_1pct / size(V_true, 2);
-    info.max_principal_angle = max([cap.principal_angles_directed; 0]);
     info.ok = true;
 end
 
 function write_results_csv(csvPath, rows)
-%WRITE_RESULTS_CSV  Flat CSV of the sweep results.
-%   New basis-invariant metrics first, old per-column diagnostics after.
+%WRITE_RESULTS_CSV  Flat CSV of the sweep results (directed-angle metrics).
     fid = fopen(csvPath, 'w');
     fprintf(fid, ['Z,P0_kind,P0_ncols,polynomial,degree,', ...
                   'eigspace_err_2,eigspace_err_fro,angle_capture_frac_1pct,', ...
                   'n_angle_below_1pct,n_angle_below_0p1pct,r_true,r_comp,', ...
-                  'max_residual,mean_residual,n_res_below_1pct,', ...
-                  'n_res_below_0p1pct,capture_frac_1pct,max_principal_angle,', ...
                   'time_seconds\n']);
     for i = 1:numel(rows)
         r = rows(i);
-        fprintf(fid, '%s,%s,%d,%s,%d,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g\n', ...
+        fprintf(fid, '%s,%s,%d,%s,%d,%g,%g,%g,%g,%g,%g,%g,%g\n', ...
                 r.Z, r.P0_kind, r.P0_ncols, r.poly, r.degree, ...
                 r.eigspace_err_2, r.eigspace_err_fro, ...
                 r.angle_capture_frac_1pct, ...
                 r.n_angle_below_1pct, r.n_angle_below_0p1pct, ...
                 r.r_true, r.r_comp, ...
-                r.max_residual, r.mean_residual, ...
-                r.n_res_below_1pct, r.n_res_below_0p1pct, ...
-                r.capture_frac_1pct, r.max_principal_angle, ...
                 r.time_seconds);
     end
     fclose(fid);

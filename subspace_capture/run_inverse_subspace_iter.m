@@ -8,8 +8,8 @@
 %   Z = Tsym^{-1} = L^T A^{-1} L,   Tsym = L^{-1} A L^{-T},  L = ichol(A,'nofill').
 % Plain power iteration with this Z drives a starting block toward the dominant
 % eigenvectors of Tsym^{-1} == the SMALLEST eigenvectors of Tsym.  We use
-% src.precond.subspace_iter_plain (NO re-orthogonalization inside the loop) and
-% orthonormalize only ONCE at the end, just before measuring capture.
+% src.precond.subspace_iter_plain (NO re-orthogonalization inside the loop);
+% the single orthonormalization is the pivoted QR inside the capture metric.
 %
 % Four starting blocks are compared in two matched-width ablation pairs, all
 % built from the preconditioned operator T:
@@ -28,8 +28,7 @@
 % unstable exact inverse against the slower-but-stable polynomial filters.
 %
 % Capture metric (basis-invariant): directed principal-angle sines from
-% span(V_true) into span(Q), via the local subspace_capture_directed.  Old
-% per-column residuals are kept as CSV diagnostics.
+% span(V_true) into span(Q), via the local subspace_capture_directed.
 %
 % Outputs (subspace_capture/output_inverse_iter/):
 %   results.mat / results.csv
@@ -295,30 +294,34 @@ end
 function info = run_one_method(method, ops, P0, q, V_true)
 %RUN_ONE_METHOD  Apply one method at "work level" q, then measure capture.
 %   q counts operator applications for all methods:
-%     inverse   : q plain applications of Z = Tsym^{-1} (no reorth), orth at end.
-%     chebyshev : degree-q Chebyshev high-pass filter on forward Tsym, orth at end.
+%     inverse   : q plain applications of Z = Tsym^{-1} (no reorth).
+%     chebyshev : degree-q Chebyshev high-pass filter on forward Tsym.
 %     power_iz  : degree-q damped power filter (I - Tsym/lam_max)^q (final orth
 %                 done inside min_subspace_iter).
-%   At q=0 all three reduce to orth(P0) -- a built-in consistency check.
+%   inverse/chebyshev pass the RAW block: the metric's pivoted QR is the
+%   single orthonormalization.  At q=0 all three reduce to orth-of-P0 -- a
+%   built-in consistency check.
     info = new_capture_info();
     t0   = tic;
     try
         switch method
             case 'inverse'
-                Y = src.precond.subspace_iter_plain(ops.invApply, P0, q);
-                Q = orth(Y);                   % only orth -- at the very end
+                Q = src.precond.subspace_iter_plain(ops.invApply, P0, q);
+                Q_is_orth = false;
             case 'chebyshev'
-                Y = src.precond.chebyshev_apply(ops.Zfun_Tsym, P0, q, ...
+                Q = src.precond.chebyshev_apply(ops.Zfun_Tsym, P0, q, ...
                                                 ops.lam_cut, ops.lam_max);
-                Q = orth(Y);
+                Q_is_orth = false;
             case 'power_iz'
                 Dinv = (1 / ops.lam_max) * ones(ops.n, 1);
+                % min_subspace_iter ends with orth(Y) => output orthonormal.
                 Q = src.precond.min_subspace_iter(ops.Zfun_Tsym, P0, q, ...
                                                   Dinv, 1.0, false);
+                Q_is_orth = true;
             otherwise
                 error('run_one_method: unknown method %s', method);
         end
-        info = fill_capture_info(info, V_true, Q);
+        info = fill_capture_info(info, V_true, Q, Q_is_orth);
     catch ME
         info.err = regexprep(ME.message, '\n.*', '');
         warning('run_inverse_subspace_iter:run_one_method_failed', ...
@@ -350,23 +353,21 @@ end
 
 function info = new_capture_info()
 %NEW_CAPTURE_INFO  Empty result struct.
-%   Primary metrics are the basis-invariant directed principal-angle ones;
-%   the old per-column residual metrics are retained as diagnostics only.
+%   All metrics are the basis-invariant directed principal-angle ones.
     info = struct( ...
         'eigspace_err_2', NaN, 'eigspace_err_fro', NaN, ...
         'angle_capture_frac_1pct', NaN, ...
         'n_angle_below_1pct', NaN, 'n_angle_below_0p1pct', NaN, ...
         'r_true', NaN, 'r_comp', NaN, ...
-        'max_residual', NaN, 'mean_residual', NaN, ...
-        'n_res_below_1pct', NaN, 'n_res_below_0p1pct', NaN, ...
-        'capture_frac_1pct', NaN, 'max_principal_angle', NaN, ...
         'time_seconds', NaN, 'ok', false, 'err', '');
 end
 
-function info = fill_capture_info(info, V_true, Q)
+function info = fill_capture_info(info, V_true, Q, Q_is_orth)
 %FILL_CAPTURE_INFO  Populate capture metrics from a computed basis Q.
-    cap = subspace_capture_directed(V_true, Q);
-    % Basis-invariant directed principal-angle metrics (primary).
+%   V_true comes from eigs (symmetric problem) => orthonormal columns;
+%   Q_is_orth says whether Q is already orthonormal too.
+    capOpts = struct('true_is_orth', true, 'comp_is_orth', Q_is_orth);
+    cap = subspace_capture_directed(V_true, Q, [], capOpts);
     info.eigspace_err_2          = cap.eigspace_err_2;
     info.eigspace_err_fro        = cap.eigspace_err_fro;
     info.n_angle_below_1pct      = cap.n_angle_below_1pct;
@@ -374,37 +375,24 @@ function info = fill_capture_info(info, V_true, Q)
     info.angle_capture_frac_1pct = cap.n_angle_below_1pct / max(cap.r_true, 1);
     info.r_true                  = cap.r_true;
     info.r_comp                  = cap.r_comp;
-    % Old basis-dependent per-column metrics (diagnostics).
-    info.max_residual        = cap.max_residual;
-    info.mean_residual       = cap.mean_residual;
-    info.n_res_below_1pct    = cap.n_res_below_1pct;
-    info.n_res_below_0p1pct  = cap.n_res_below_0p1pct;
-    info.capture_frac_1pct   = cap.n_res_below_1pct / size(V_true, 2);
-    info.max_principal_angle = max([cap.principal_angles_directed; 0]);
     info.ok = true;
 end
 
 function write_results_csv(csvPath, rows)
-%WRITE_RESULTS_CSV  Flat CSV of the sweep results.
-%   New basis-invariant metrics first, old per-column diagnostics after.
+%WRITE_RESULTS_CSV  Flat CSV of the sweep results (directed-angle metrics).
     fid = fopen(csvPath, 'w');
     fprintf(fid, ['P0_kind,method,P0_ncols,iter,', ...
                   'eigspace_err_2,eigspace_err_fro,angle_capture_frac_1pct,', ...
                   'n_angle_below_1pct,n_angle_below_0p1pct,r_true,r_comp,', ...
-                  'max_residual,mean_residual,n_res_below_1pct,', ...
-                  'n_res_below_0p1pct,capture_frac_1pct,max_principal_angle,', ...
                   'time_seconds\n']);
     for i = 1:numel(rows)
         r = rows(i);
-        fprintf(fid, '%s,%s,%d,%d,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g\n', ...
+        fprintf(fid, '%s,%s,%d,%d,%g,%g,%g,%g,%g,%g,%g,%g\n', ...
                 r.P0_kind, r.method, r.P0_ncols, r.iter, ...
                 r.eigspace_err_2, r.eigspace_err_fro, ...
                 r.angle_capture_frac_1pct, ...
                 r.n_angle_below_1pct, r.n_angle_below_0p1pct, ...
                 r.r_true, r.r_comp, ...
-                r.max_residual, r.mean_residual, ...
-                r.n_res_below_1pct, r.n_res_below_0p1pct, ...
-                r.capture_frac_1pct, r.max_principal_angle, ...
                 r.time_seconds);
     end
     fclose(fid);

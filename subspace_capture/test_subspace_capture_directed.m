@@ -28,10 +28,7 @@ info1 = subspace_capture_directed(V_true * O1, V_true(:, 1:k-2));
 info2 = subspace_capture_directed(V_true * O2, V_true(:, 1:k-2));
 assert(max(abs(info1.sin_angles_directed - info2.sin_angles_directed)) < tol_eq, ...
        'T1: directed sines must be basis-invariant');
-% The old per-column residuals DO depend on the basis (that was the problem).
-assert(max(abs(info1.residual_per_vec - info2.residual_per_vec)) > 1e-3, ...
-       'T1: per-column residuals expected to differ across bases here');
-fprintf('PASS T1: basis invariance (and old metric shown basis-dependent)\n');
+fprintf('PASS T1: basis invariance\n');
 
 %% Test 2: exact containment -> zero error ---------------------------------
 info = subspace_capture_directed(V_true, V_true * rand_orth(k));
@@ -111,6 +108,25 @@ assert(abs(info_new.eigspace_err_2 - sin(max(info_old.principal_angles))) < 1e-8
 assert(info_new.eigspace_err_2 >= info_old.max_residual - 1e-12, ...
        'T8: worst-direction error dominates worst-column error');
 fprintf('PASS T8: consistency with src.precond.subspace_capture\n');
+
+%% Test 9: orthonormal-input flags skip QR but give identical results ------
+V_comp = orth(V_true(:, 1:k-2) + 0.02 * randn(n, k-2));   % orthonormal candidate
+info_qr = subspace_capture_directed(V_true, V_comp);
+info_fl = subspace_capture_directed(V_true, V_comp, [], ...
+              struct('true_is_orth', true, 'comp_is_orth', true));
+assert(max(abs(info_qr.sin_angles_directed - info_fl.sin_angles_directed)) < 1e-12, ...
+       'T9: flagged path must match the QR path on orthonormal inputs');
+assert(info_fl.r_true == k && info_fl.r_comp == k - 2, ...
+       'T9: flagged ranks are the column counts');
+% Flags are independent: flag only one side.
+info_h = subspace_capture_directed(V_true, V_comp, [], struct('comp_is_orth', true));
+assert(max(abs(info_qr.sin_angles_directed - info_h.sin_angles_directed)) < 1e-12, ...
+       'T9: single-flag path must match too');
+% 4-arg call with explicit thresholds still works with flags.
+info_t = subspace_capture_directed(V_true, V_comp, [0.5; 1e-2], ...
+              struct('true_is_orth', true));
+assert(isequal(size(info_t.n_angle_below), [2 1]), 'T9: thresholds with opts');
+fprintf('PASS T9: orthonormal-input flags\n');
 
 fprintf('\nAll subspace_capture_directed tests passed.\n');
 
