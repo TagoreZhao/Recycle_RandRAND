@@ -234,7 +234,7 @@ T.defl_rebuilt     = R.defl_rebuilt;
 writetable(T, fullfile(outDir, 'all_results.csv'));
 fprintf('\nWrote %s\n', fullfile(outDir, 'all_results.csv'));
 
-fh = figure('Visible', 'off', 'Position', [100 100 760 440]);
+fh = figure('Visible', 'off', 'Position', [100 100 980 440]);
 markers = {'-o', '-s', '-^', '-d', '-v', '-p', '-h', '-x', '-*', '-+'};
 hold on;
 for s = 1:numel(solver_keys)
@@ -247,7 +247,7 @@ end
 set(gca, 'XScale', 'log', 'YScale', 'log');
 xlim([min(params.Sigma2List), max(params.Sigma2List)]);  % keep failed-run gaps visible
 grid on; xlabel('\sigma^2'); ylabel('PCG iterations');
-legend(solver_labels, 'Location', 'best', 'Interpreter', 'none');
+legend(solver_labels, 'Location', 'eastoutside', 'Interpreter', 'none');
 title(sprintf('CCPP kernel PCG: iterations vs regularization (n=%d, %d largest eigvecs)', ...
               n, kLg), 'Interpreter', 'none');
 saveas(fh, fullfile(outDir, 'iterations_vs_sigma2.png')); close(fh);
