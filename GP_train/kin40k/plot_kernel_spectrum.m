@@ -93,11 +93,17 @@ function plot_kernel_spectrum(varargin)
     end
 
     % --- Render overlay figure (smallest | largest) ---
-    fig = figure('Color', 'w', 'Position', [50, 50, 1300, 620]);
+    fig = figure('Visible', 'off', 'Color', 'w', 'Position', [50, 50, 1300, 620]);
     tl = tiledlayout(fig, 1, 2, 'Padding', 'compact', 'TileSpacing', 'compact');
 
     draw_spectrum_overlay(nexttile(tl), res, 'smallest', k);
-    draw_spectrum_overlay(nexttile(tl), res, 'largest', k);
+    [legH, legL] = draw_spectrum_overlay(nexttile(tl), res, 'largest', k);
+
+    % Shared legend in the south tile (mirrors symindefinite/linear_solves/
+    % plot_eigenspectrum.m); per-axes 'best' legends collide with the title.
+    lg = legend(legH, legL, 'Orientation', 'horizontal', 'FontSize', 9, ...
+                'Box', 'on');
+    lg.Layout.Tile = 'south';
 
     title(tl, sprintf('Kernel-ridge spectrum: A vs M = L^{-1} A L^{-T}  (n=%d, \\sigma^2=%g)', ...
           N, opt.Sigma2), 'FontWeight', 'bold', 'FontSize', 13, 'Interpreter', 'tex');
@@ -115,39 +121,66 @@ end
 function [d_small, d_large] = eig_ends_explicit(A, k)
 %EIG_ENDS_EXPLICIT  Smallest-k and largest-k eigenvalues of explicit SPD A.
 %   Returns column vectors sorted ascending (d_small) and descending (d_large).
-    opts = struct('Tolerance', 1e-10, 'MaxIterations', 5000);
-    dS = eigs(A, k, 'smallestabs', opts);
-    dL = eigs(A, k, 'largestabs', opts);
+%   Small systems use exact dense eig — robust to the degenerate cluster at
+%   sigma2 that stalls eigs 'smallestabs' on flat-tail datasets; larger ones
+%   fall back to eigs (options MUST be name-value pairs: eigs silently ignores
+%   an options struct with these field names).
+    if size(A, 1) <= dense_eig_max()
+        [d_small, d_large] = dense_eig_ends((A + A') / 2, k);
+        return;
+    end
+    dS = eigs(A, k, 'smallestabs', 'Tolerance', 1e-10, 'MaxIterations', 5000);
+    dL = eigs(A, k, 'largestabs',  'Tolerance', 1e-10, 'MaxIterations', 5000);
     d_small = sort(real(dS), 'ascend');
     d_large = sort(real(dL), 'descend');
 end
 
 function [d_small, d_large] = eig_ends_precond(A, L, k)
 %EIG_ENDS_PRECOND  Smallest-k and largest-k eigenvalues of M = L^{-1} A L^{-T}.
-%   Largest via the forward handle Tfun = L\(A*(L'\x)); smallest via the
-%   inverse handle Tinv = L'*(A\(L*x)) so 'smallestabs' becomes a largest
-%   problem on M^{-1} (mirrors run_subspace_capture.m). M is symmetric.
+%   Small systems form M explicitly (two triangular solves) and use exact dense
+%   eig. Larger ones use eigs handles: largest via Tfun = L\(A*(L'\x));
+%   smallest via the inverse handle Tinv = L'*(A\(L*x)) so 'smallestabs'
+%   becomes a largest problem on M^{-1} (mirrors run_subspace_capture.m).
+%   M is symmetric.
     n  = size(A, 1);
     Lt = L';
 
-    optsL = struct('Tolerance', 1e-10, 'MaxIterations', 5000, ...
-                   'IsFunctionSymmetric', true);
+    if n <= dense_eig_max()
+        M = L \ A / Lt;                                % L^{-1} A L^{-T}, dense
+        [d_small, d_large] = dense_eig_ends((M + M') / 2, k);
+        return;
+    end
+
     Tfun = @(x) L \ (A * (Lt \ x));
-    dL   = eigs(Tfun, n, k, 'largestabs', optsL);
+    dL   = eigs(Tfun, n, k, 'largestabs', 'Tolerance', 1e-10, ...
+                'MaxIterations', 5000, 'IsFunctionSymmetric', true);
     d_large = sort(real(dL), 'descend');
 
     dA   = decomposition(A, 'chol');
     Tinv = @(x) Lt * (dA \ (L * x));
-    optsS = struct('Tolerance', 1e-10, 'MaxIterations', 5000);
-    dS   = eigs(Tinv, n, k, 'smallestabs', optsS);
+    dS   = eigs(Tinv, n, k, 'smallestabs', 'Tolerance', 1e-10, ...
+                'MaxIterations', 5000, 'IsFunctionSymmetric', true);
     d_small = sort(real(dS), 'ascend');
 end
 
-function draw_spectrum_overlay(ax, res, mode, k)
+function [d_small, d_large] = dense_eig_ends(S, k)
+%DENSE_EIG_ENDS  Exact smallest-k / largest-k eigenvalues of dense symmetric S.
+    d = sort(eig(S, 'vector'), 'ascend');
+    d_small = d(1:k);
+    d_large = d(end:-1:end-k+1);
+end
+
+function nmax = dense_eig_max()
+%DENSE_EIG_MAX  Largest n for which exact dense eig replaces eigs.
+    nmax = 4000;
+end
+
+function [legH, legL] = draw_spectrum_overlay(ax, res, mode, k)
 %DRAW_SPECTRUM_OVERLAY  Overlay A (warm) and M (cool) spectra across c values.
 %   mode = 'smallest' : ascending eigenvalues, x-axis reversed (k -> 1).
 %   mode = 'largest'  : descending eigenvalues, natural x-axis (1 -> k).
-%   Darker shade = larger c (smoother kernel).
+%   Darker shade = larger c (smoother kernel). Returns line handles and labels
+%   for the caller's shared legend.
     nC = numel(res);
 
     % Light -> dark ramps: warm for A, cool for M.
@@ -170,8 +203,8 @@ function draw_spectrum_overlay(ax, res, mode, k)
             DA = res(ic).A_large(:);
             DM = res(ic).M_large(:);
         end
-        DA(DA <= 0) = NaN;
-        DM(DM <= 0) = NaN;
+        DA = mask_bad_eigs(DA, sprintf('A (c=%.3g, %s)', res(ic).c, mode));
+        DM = mask_bad_eigs(DM, sprintf('M (c=%.3g, %s)', res(ic).c, mode));
 
         hA = semilogy(ax, 1:numel(DA), DA, '-', 'LineWidth', 1.6, 'Color', cA);
         hM = semilogy(ax, 1:numel(DM), DM, '-', 'LineWidth', 1.6, 'Color', cM);
@@ -193,9 +226,18 @@ function draw_spectrum_overlay(ax, res, mode, k)
     end
     set(ax, 'YScale', 'log', 'FontSize', 12, 'Box', 'on');
     ylabel(ax, '\lambda_i  (log scale)', 'FontSize', 12);
-    legend(ax, legH, legL, 'Location', 'best', 'FontSize', 9, 'Box', 'on', ...
-           'NumColumns', 2);
     hold(ax, 'off');
+end
+
+function d = mask_bad_eigs(d, label)
+%MASK_BAD_EIGS  NaN-out NaN/nonpositive eigenvalues for the log axis, loudly.
+    bad = ~isfinite(d) | d <= 0;
+    if any(bad)
+        warning('plot_kernel_spectrum:badEigs', ...
+                '%s: %d of %d eigenvalues NaN/nonpositive — masked on log axis.', ...
+                label, sum(bad), numel(d));
+    end
+    d(bad) = NaN;
 end
 
 function t = ramp_t(ic, nC)
