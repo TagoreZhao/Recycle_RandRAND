@@ -1,19 +1,31 @@
-function plot_hessian_spectrum(specByLambda, lambdaList, outDir, dsName)
+function plot_hessian_spectrum(specByLambda, lambdaList, outDir, dsName, ...
+                               fileName, sysLabel)
 %PLOT_HESSIAN_SPECTRUM  Smallest|largest Newton-Hessian spectra across lambda.
 %   PLOT_HESSIAN_SPECTRUM(specByLambda, lambdaList, outDir, dsName) renders a
 %   two-tile figure mirroring GP_train/plot_kernel_spectrum.m:
 %     Tile 1 (smallest) : semilogy of the smallest-K Hessian eigenvalues, one
 %                         curve per lambda (light -> dark as lambda grows), with
 %                         a dashed reference line at each lambda (the spectrum
-%                         floor). The x-axis is reversed (k -> 1) so the spike
-%                         piling onto the lambda floor sits at the left.
+%                         floor). The x-axis is reversed (k -> 1): eigenvalue
+%                         index 1 sits at the right edge, so the spike piling
+%                         onto the lambda floor sits at the right.
 %     Tile 2 (largest)  : semilogy of the largest-K eigenvalues, natural axis.
-%   The figure is saved as results/figures/hessian_eig_spectrum.pdf.
+%   The figure is saved as fullfile(outDir, fileName).
+%
+%   PLOT_HESSIAN_SPECTRUM(..., fileName, sysLabel) overrides the output PDF
+%   name (default 'hessian_eig_spectrum.pdf') and the title tag naming which
+%   system of each Newton sequence is shown (default 'converged Newton
+%   system'). run_logistic_benchmark uses this to render both the converged
+%   (last) and the first system of each lambda's sequence. For the
+%   per-iteration systems of a single lambda, see
+%   plot_hessian_sequence_spectrum.
 %
 %   specByLambda(il) must provide eigs_small (ascending) and eigs_large
 %   (descending) plus lambda_floor; see hessian_spectrum.
 
-    if nargin < 4 || isempty(dsName), dsName = 'dataset'; end
+    if nargin < 4 || isempty(dsName),   dsName   = 'dataset'; end
+    if nargin < 5 || isempty(fileName), fileName = 'hessian_eig_spectrum.pdf'; end
+    if nargin < 6 || isempty(sysLabel), sysLabel = 'converged Newton system'; end
     if ~exist(outDir, 'dir'), mkdir(outDir); end
 
     mode = specByLambda(1).mode;
@@ -24,10 +36,11 @@ function plot_hessian_spectrum(specByLambda, lambdaList, outDir, dsName)
     draw_overlay(nexttile(tl), specByLambda, lambdaList, 'smallest');
     draw_overlay(nexttile(tl), specByLambda, lambdaList, 'largest');
 
-    title(tl, sprintf('%s: logistic Newton Hessian H = X^TWX + \\lambda I  (%s mode)', ...
-          dsName, mode), 'FontWeight', 'bold', 'FontSize', 13, 'Interpreter', 'tex');
+    title(tl, sprintf(['%s: logistic Newton Hessian H = X^TWX + \\lambda I, ', ...
+          '%s  (%s mode)'], dsName, sysLabel, mode), ...
+          'FontWeight', 'bold', 'FontSize', 13, 'Interpreter', 'tex');
 
-    outFile = fullfile(outDir, 'hessian_eig_spectrum.pdf');
+    outFile = fullfile(outDir, fileName);
     exportgraphics(fig, outFile, 'ContentType', 'vector');
     fprintf('Saved %s\n', outFile);
     close(fig);
@@ -36,7 +49,8 @@ end
 %% --------- local helpers ---------
 function draw_overlay(ax, specByLambda, lambdaList, mode)
 %DRAW_OVERLAY  Overlay one eigenvalue end across all lambda values.
-%   mode = 'smallest' : eigs_small (ascending), x-axis reversed (k -> 1).
+%   mode = 'smallest' : eigs_small (ascending), x-axis reversed (k -> 1),
+%                       so the lambda-floor spike sits at the right.
 %   mode = 'largest'  : eigs_large (descending), natural x-axis (1 -> k).
 %   Darker shade = larger lambda. A dashed yline marks each lambda floor.
     nL = numel(specByLambda);
