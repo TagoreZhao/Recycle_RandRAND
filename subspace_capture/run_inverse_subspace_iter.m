@@ -35,7 +35,12 @@
 %   eigspace_err2_inv.pdf           — ||(I-P)Q_true||_2 (log y) vs iteration q
 %   angle_capture_fraction_inv.pdf  — fraction of directions with
 %                                     sin(theta)<1% vs iteration q
-%   aggregate_1x2.png               — both panels side by side (convenience)
+%   kappa_ratio_inv.pdf             — kappa_approx/kappa_exact of the two-level
+%                                     deflated system (log y) vs iteration q,
+%                                     via the local deflated_cond_two_level
+%                                     (kappa_exact = deflation with V_true;
+%                                     analytically lam_max/lam_cut)
+%   aggregate_1x3.png               — all three panels side by side (convenience)
 %
 % Ground truth (smallest k eigenvectors of Tsym) is read from the cache that
 % run_subspace_capture.m already populated (output/cache/eigsTsym_k500.mat); no
@@ -105,6 +110,20 @@ Zfun_Tsym = @(X) L \ (A * (Lt \ X));
 lam_max_T = load_or_compute_lam_max(cacheDir, 'Tsym', Zfun_Tsym, n);
 fprintf('lam_max(Tsym) = %.4e\n', lam_max_T);
 
+% Condition number of the EXACTLY deflated two-level system (W = V_true_T),
+% computed once; every sweep point is reported relative to it.
+condOpts  = struct('eigs_tol', 1e-8, 'eigs_maxit', 5000);   % per-point (raw W)
+exactOpts = struct('eigs_tol', 1e-8, 'eigs_maxit', 5000, 'W_is_orth', true);
+exactCond = deflated_cond_two_level(V_true_T, Zfun_Tsym, invApply, lam_cut, n, ...
+                                    exactOpts);
+if ~exactCond.ok
+    error('run_inverse_subspace_iter:kappaExactFailed', ...
+          'kappa_exact computation failed: %s', exactCond.err);
+end
+kappa_exact = exactCond.kappa;
+fprintf('kappa_exact = %.6e  (analytic lam_max_T/lam_cut = %.6e)\n', ...
+        kappa_exact, lam_max_T / lam_cut);
+
 %% --- Tentative prolongator from the preconditioned operator T --------------
 T_sparse = build_Tsym_sparse(L, Lt, A, drop_rel_tol);
 fprintf(['Tsym sparsification: nnz=%d (%.2f%% of n^2), ', ...
@@ -128,7 +147,8 @@ end
 %% --- Sweep ----------------------------------------------------------------
 % Operator handles + spectral bounds shared by the per-q runs.
 ops = struct('invApply', invApply, 'Zfun_Tsym', Zfun_Tsym, ...
-             'lam_cut', lam_cut, 'lam_max', lam_max_T, 'n', n);
+             'lam_cut', lam_cut, 'lam_max', lam_max_T, 'n', n, ...
+             'kappa_exact', kappa_exact, 'condOpts', condOpts);
 
 rows = [];
 for ik = 1:numel(P0_kinds)
@@ -153,9 +173,10 @@ for ik = 1:numel(P0_kinds)
             info.method   = method;
             info.iter     = q;
             rows = [rows; info];                                      %#ok<AGROW>
-            fprintf('  %-16s %-10s q=%2d : err_2=%.3e  angle_capture=%.3f\n', ...
+            fprintf(['  %-16s %-10s q=%2d : err_2=%.3e  angle_capture=%.3f', ...
+                     '  kappa_ratio=%.3e\n'], ...
                     kind, method, q, info.eigspace_err_2, ...
-                    info.angle_capture_frac_1pct);
+                    info.angle_capture_frac_1pct, info.kappa_ratio);
         end
     end
 end
@@ -164,7 +185,8 @@ end
 meta = struct('n', n, 'k', k, 'm', m, 'iters', iters, ...
               'contrast', contrast, 'h0', h0, 't_snap', t_snap, ...
               'nc_T', nc_T, 'Z', 'Tsym_inverse', ...
-              'lam_cut', lam_cut, 'lam_max_T', lam_max_T);
+              'lam_cut', lam_cut, 'lam_max_T', lam_max_T, ...
+              'kappa_exact', kappa_exact);
 save(fullfile(outDir, 'results.mat'), 'rows', 'meta', '-v7');
 write_results_csv(fullfile(outDir, 'results.csv'), rows);
 fprintf('\nresults.mat and results.csv written to:\n  %s\n', outDir);
@@ -224,9 +246,12 @@ function [V_true, lam_cut, lam_first] = load_or_compute_eigs_Tsym(cacheDir, A, L
     Lt   = L';
     dA   = decomposition(A, 'chol');
     Tinv = @(x) Lt * (dA \ (L * x));
-    opts = struct('Tolerance', 1e-10, 'MaxIterations', 5000);
     t0   = tic;
-    [Vraw, Dmat] = eigs(Tinv, size(A, 1), k + 1, 'smallestabs', opts);
+    % Name-value options, NOT the legacy opts struct: eigs silently ignores
+    % struct fields with these capitalized names.
+    [Vraw, Dmat] = eigs(Tinv, size(A, 1), k + 1, 'smallestabs', ...
+                        'Tolerance', 1e-10, 'MaxIterations', 5000, ...
+                        'IsFunctionSymmetric', true);
     [D, idx]     = sort(real(diag(Dmat)), 'ascend');
     V            = real(Vraw(:, idx));
     fprintf('  done in %.1f s\n', toc(t0));
@@ -322,6 +347,13 @@ function info = run_one_method(method, ops, P0, q, V_true)
                 error('run_one_method: unknown method %s', method);
         end
         info = fill_capture_info(info, V_true, Q, Q_is_orth);
+        % Two-level deflated condition number with W = orth(range(Q)); a
+        % failed estimate leaves NaN without invalidating the capture row.
+        c = deflated_cond_two_level(Q, ops.Zfun_Tsym, ops.invApply, ...
+                                    ops.lam_cut, ops.n, ops.condOpts);
+        info.kappa_approx = c.kappa;
+        info.kappa_ratio  = c.kappa / ops.kappa_exact;
+        info.r_defl       = c.r;
     catch ME
         info.err = regexprep(ME.message, '\n.*', '');
         warning('run_inverse_subspace_iter:run_one_method_failed', ...
@@ -340,12 +372,15 @@ function lam_max = load_or_compute_lam_max(cacheDir, kind, op, n)
         return;
     end
     fprintf('Computing lam_max(%s) ...\n', kind);
-    opts = struct('Tolerance', 1e-8, 'MaxIterations', 5000, ...
-                  'IsFunctionSymmetric', true);
+    % Name-value options, NOT the legacy opts struct: eigs silently ignores
+    % struct fields with these capitalized names.
     if isnumeric(op)
-        d = eigs(op, 1, 'largestabs', opts);
+        d = eigs(op, 1, 'largestabs', ...
+                 'Tolerance', 1e-8, 'MaxIterations', 5000);
     else
-        d = eigs(op, n, 1, 'largestabs', opts);
+        d = eigs(op, n, 1, 'largestabs', ...
+                 'Tolerance', 1e-8, 'MaxIterations', 5000, ...
+                 'IsFunctionSymmetric', true);
     end
     lam_max = real(d);
     save(cachePath, 'lam_max', '-v7');
@@ -359,6 +394,7 @@ function info = new_capture_info()
         'angle_capture_frac_1pct', NaN, ...
         'n_angle_below_1pct', NaN, 'n_angle_below_0p1pct', NaN, ...
         'r_true', NaN, 'r_comp', NaN, ...
+        'kappa_approx', NaN, 'kappa_ratio', NaN, 'r_defl', NaN, ...
         'time_seconds', NaN, 'ok', false, 'err', '');
 end
 
@@ -384,15 +420,16 @@ function write_results_csv(csvPath, rows)
     fprintf(fid, ['P0_kind,method,P0_ncols,iter,', ...
                   'eigspace_err_2,eigspace_err_fro,angle_capture_frac_1pct,', ...
                   'n_angle_below_1pct,n_angle_below_0p1pct,r_true,r_comp,', ...
-                  'time_seconds\n']);
+                  'kappa_approx,kappa_ratio,r_defl,time_seconds\n']);
     for i = 1:numel(rows)
         r = rows(i);
-        fprintf(fid, '%s,%s,%d,%d,%g,%g,%g,%g,%g,%g,%g,%g\n', ...
+        fprintf(fid, '%s,%s,%d,%d,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g\n', ...
                 r.P0_kind, r.method, r.P0_ncols, r.iter, ...
                 r.eigspace_err_2, r.eigspace_err_fro, ...
                 r.angle_capture_frac_1pct, ...
                 r.n_angle_below_1pct, r.n_angle_below_0p1pct, ...
                 r.r_true, r.r_comp, ...
+                r.kappa_approx, r.kappa_ratio, r.r_defl, ...
                 r.time_seconds);
     end
     fclose(fid);
@@ -437,12 +474,12 @@ function make_inverse_plots(rows, out_dir)
     if ~exist(out_dir, 'dir'), mkdir(out_dir); end
 
     specs = struct( ...
-        'metric', {'eigspace_err_2',        'angle_capture_frac_1pct'}, ...
-        'yscale', {'log',                   'linear'}, ...
-        'ylabel', {'||(I-P)Q_{true}||_2',   'captured directions (sin\theta < 1%)'}, ...
-        'title',  {'eigenspace error',      'angle capture fraction'}, ...
-        'legloc', {'southwest',             'northeast'}, ...
-        'tag',    {'eigspace_err2_inv',     'angle_capture_fraction_inv'});
+        'metric', {'eigspace_err_2',        'angle_capture_frac_1pct',              'kappa_ratio'}, ...
+        'yscale', {'log',                   'linear',                               'log'}, ...
+        'ylabel', {'||(I-P)Q_{true}||_2',   'captured directions (sin\theta < 1%)', '\kappa_{approx} / \kappa_{exact}'}, ...
+        'title',  {'eigenspace error',      'angle capture fraction',               'deflated condition-number ratio'}, ...
+        'legloc', {'southwest',             'northeast',                            'northeast'}, ...
+        'tag',    {'eigspace_err2_inv',     'angle_capture_fraction_inv',           'kappa_ratio_inv'});
 
     for ip = 1:numel(specs)
         fig = figure('Visible', 'off', 'Units', 'inches', ...
@@ -456,15 +493,15 @@ function make_inverse_plots(rows, out_dir)
 
     % Convenience side-by-side PNG.
     fig = figure('Visible', 'off', 'Units', 'inches', ...
-                 'Position', [0 0 11 3.6], 'Color', 'w');
-    tl = tiledlayout(fig, 1, 2, 'Padding', 'compact', 'TileSpacing', 'compact');
+                 'Position', [0 0 16 3.6], 'Color', 'w');
+    tl = tiledlayout(fig, 1, 3, 'Padding', 'compact', 'TileSpacing', 'compact');
     for ip = 1:numel(specs)
         draw_inverse_panel(nexttile(tl), rows, specs(ip));
     end
     title(tl, ['Capture vs operator applications q: exact-inverse iteration ', ...
                'vs polynomial filters'], ...
           'FontWeight', 'bold', 'FontSize', 12);
-    outfile = fullfile(out_dir, 'aggregate_1x2.png');
+    outfile = fullfile(out_dir, 'aggregate_1x3.png');
     exportgraphics(fig, outfile, 'Resolution', 200);
     close(fig);
     fprintf('Wrote %s\n', outfile);
@@ -497,6 +534,10 @@ function draw_inverse_panel(ax, rows, spec)
         xall = [xall, xs];  %#ok<AGROW>
     end
     hold(ax, 'off');
+
+    if strcmp(spec.metric, 'kappa_ratio')
+        yline(ax, 1, ':', 'Color', [0.5 0.5 0.5], 'HandleVisibility', 'off');
+    end
 
     set(ax, 'XScale', 'linear', 'YScale', spec.yscale, 'Box', 'on', ...
             'LineWidth', 0.6, 'FontSize', 9);
