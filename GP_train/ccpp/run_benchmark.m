@@ -3,15 +3,20 @@
 % Builds the dense RBF kernel K once on an n-point CCPP subset and, for each
 % regularization value sigma2 in params.Sigma2List, solves the SPD system
 %     A(sigma2) x = b,   A(sigma2) = K + sigma2*I,   b = standardized targets,
-% with five PCG solvers:
-%   unprec         : no preconditioner
-%   ichol          : incomplete Cholesky (ict/droptol, via build_ichol_robust)
-%   amg            : smoothed-aggregation AMG V-cycle with the ichol factor as
-%                    fine smoother (make_amg_preconditioner)
-%   defl_P         : deflation P = (I-VV') + tau*V(V'AV)^-1 V' applied directly
-%                    on A, V = largest DEFLAT_LG_EIG eigenvectors of A
-%   twolevel_VAhat : two-level split scheme B = L^-T P L^-1 on Ahat = L^-1 A L^-T
-%                    with V = largest eigenvectors of Ahat
+% with these PCG solvers:
+%   unprec          : no preconditioner
+%   ichol           : incomplete Cholesky (ict/droptol, via build_ichol_robust)
+%   amg             : smoothed-aggregation AMG V-cycle with the ichol factor as
+%                     fine smoother (make_amg_preconditioner)
+%   defl_P          : deflation P = (I-VV') + tau*V(V'AV)^-1 V' applied directly
+%                     on A, V = largest DEFLAT_LG_EIG eigenvectors of A
+%   defl_sketch_q*  : same deflation P on A, but V from a Gaussian-sketched
+%                     power iteration: Y = K^q * Omega with a shared start block
+%                     Omega = randn(n, SKETCH_OVERSAMPLE*DEFLAT_LG_EIG), then one
+%                     qr(Y,0); all p*k columns are kept (no Rayleigh-Ritz
+%                     truncation).  One solver/curve per q in SKETCH_Q_LIST.
+%   twolevel_VAhat  : two-level split scheme B = L^-T P L^-1 on Ahat = L^-1 A L^-T
+%                     with V = largest eigenvectors of Ahat
 % The two-level application mirrors Preconditioner_Recycle/report/
 % ball_surface_krylov_recycle/solve_krylov_recycle_surface.m:
 %   Papply = deflation_P_apply(V, Ahat_fun, tau);  Bapply = @(r) Lt\(Papply(L\r)).
@@ -46,6 +51,9 @@ params.DEFLAT_SM_EIG       = 0;     % recorded only; largest-only deflation here
 params.DEFLAT_TAU          = 0.5;   % coarse-correction weight tau
 params.DEFLAT_PREC_REFRESH = Inf;   % rebuild V every N sigma2; Inf = recycle
 
+params.SKETCH_Q_LIST     = [1 2 3]; % # K-applies per sketched basis (one curve each)
+params.SKETCH_OVERSAMPLE = 2;       % multiplicative: sketch width = p * DEFLAT_LG_EIG
+
 params.icholOpts = struct('type', 'ict', 'droptol', 1e-3, 'michol', 'on');
 params.amgOpts   = struct('maxLevels', 2, 'minCoarseSize', 800, ...
                           'theta', 0.05, 'omegaInterp', 0);
@@ -66,6 +74,13 @@ solver_keys   = {'unprec', 'ichol', 'amg', 'defl_P', 'twolevel_VAhat'};
 solver_labels = {'PCG (no prec)', 'PCG + ichol', 'PCG + AMG (ichol smoother)', ...
                  'PCG + deflation P on A (V from A)', ...
                  'PCG + two-level split (V from Ahat)'};
+sketch_keys   = arrayfun(@(q) sprintf('defl_sketch_q%d', q), ...
+                         params.SKETCH_Q_LIST, 'UniformOutput', false);
+sketch_labels = arrayfun(@(q) sprintf('PCG + deflation P on A (sketch q=%d, p=%d)', ...
+                         q, params.SKETCH_OVERSAMPLE), ...
+                         params.SKETCH_Q_LIST, 'UniformOutput', false);
+solver_keys   = [solver_keys,   sketch_keys];
+solver_labels = [solver_labels, sketch_labels];
 
 %% ===================== 2. Data + kernel (fixed for the sweep) =============
 rng(params.Seed);
@@ -99,9 +114,13 @@ R.ichol_build_time = nan(nS, 1);  R.ichol_alpha    = nan(nS, 1);
 R.amg_build_time   = nan(nS, 1);
 R.VA_build_time    = nan(nS, 1);  R.VT_build_time  = nan(nS, 1);
 R.defl_rebuilt     = zeros(nS, 1);
+for q = params.SKETCH_Q_LIST
+    R.(sprintf('sketch_q%d_build_time', q)) = nan(nS, 1);
+end
 
-V_A = [];
-V_T = [];
+V_A  = [];
+V_T  = [];
+V_sk = struct();
 for j = 1:nS
     sigma2 = params.Sigma2List(j);
     fprintf('\n===== sigma2 %d/%d = %.3e =====\n', j, nS, sigma2);
@@ -156,6 +175,16 @@ for j = 1:nS
         [V_A, ~] = eigs(K, kLg, 'largestabs', 'Tolerance', 1e-8);
         [V_A, ~] = qr(V_A, 0);
         R.VA_build_time(j) = toc(tV);
+        % Sketched bases: shared Gaussian start block, one basis per q.  Like
+        % V_A these come from K alone, so recycling across sigma2 is exact.
+        Omega = randn(n, params.SKETCH_OVERSAMPLE * kLg);
+        for q = params.SKETCH_Q_LIST
+            tV = tic;
+            Y = src.precond.subspace_iter_plain(@(X) K*X, Omega, q);  % K^q * Omega
+            [Vq, ~] = qr(Y, 0);
+            V_sk.(sprintf('defl_sketch_q%d', q)) = Vq;
+            R.(sprintf('sketch_q%d_build_time', q))(j) = toc(tV);
+        end
         if icholOK
             tV = tic;
             [V_T, ~] = eigs(Ahat_fun, n, kLg, 'largestabs', ...
@@ -174,6 +203,10 @@ for j = 1:nS
         R = run_solver(R, j, 'amg', @() pcg(Amul, b, params.Tol, params.MaxIt, Mamg));
     end
     R = run_solver(R, j, 'defl_P', @() solve_defl_on_A(Amul, b, params, V_A, tau));
+    for q = params.SKETCH_Q_LIST
+        key = sprintf('defl_sketch_q%d', q);
+        R = run_solver(R, j, key, @() solve_defl_on_A(Amul, b, params, V_sk.(key), tau));
+    end
     if icholOK && ~isempty(V_T)
         R = run_solver(R, j, 'twolevel_VAhat', ...
             @() solve_two_level(Amul, Ahat_fun, b, params, V_T, tau, L, Lt));
@@ -194,18 +227,21 @@ end
 T.ichol_build_time = R.ichol_build_time;  T.ichol_alpha   = R.ichol_alpha;
 T.amg_build_time   = R.amg_build_time;
 T.VA_build_time    = R.VA_build_time;     T.VT_build_time = R.VT_build_time;
+for q = params.SKETCH_Q_LIST
+    T.(sprintf('sketch_q%d_build_time', q)) = R.(sprintf('sketch_q%d_build_time', q));
+end
 T.defl_rebuilt     = R.defl_rebuilt;
 writetable(T, fullfile(outDir, 'all_results.csv'));
 fprintf('\nWrote %s\n', fullfile(outDir, 'all_results.csv'));
 
 fh = figure('Visible', 'off', 'Position', [100 100 760 440]);
-markers = {'-o', '-s', '-^', '-d', '-v'};
+markers = {'-o', '-s', '-^', '-d', '-v', '-p', '-h', '-x', '-*', '-+'};
 hold on;
 for s = 1:numel(solver_keys)
     its  = max(R.([solver_keys{s} '_its']), 1);   % clamp before NaN: max(NaN,1)==1
     flag = R.([solver_keys{s} '_flag']);
     its(flag ~= 0) = NaN;              % non-converged -> gap in the line
-    loglog(params.Sigma2List(:), its, markers{s}, ...
+    loglog(params.Sigma2List(:), its, markers{mod(s-1, numel(markers)) + 1}, ...
            'MarkerSize', 4, 'LineWidth', 1.2);
 end
 set(gca, 'XScale', 'log', 'YScale', 'log');
@@ -227,6 +263,7 @@ cfg_out.ell           = ell;
 cfg_out.smoke_test    = strcmp(outName, 'benchmark_sigma2_smoke');
 cfg_out.notes = {'AMG reuses the ichol factor as fine smoother.', ...
                  'V_A recycling is exact (eigenvectors of K); V_T recycling is approximate (L changes with sigma2).', ...
+                 'Sketched bases: Y = K^q * Omega (subspace_iter_plain), Omega = randn(n, p*k) shared across q, all p*k columns kept after qr(Y,0); K-based so recycling is exact.', ...
                  'Two-level = split scheme B = L^-T P L^-1 on Ahat = L^-1 A L^-T (ball_surface_krylov_recycle convention).'};
 save(fullfile(outDir, 'run_config.mat'), 'cfg_out');
 fid = fopen(fullfile(outDir, 'run_config.json'), 'w');
