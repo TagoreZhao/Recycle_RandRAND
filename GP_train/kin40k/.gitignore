@@ -3,3 +3,5 @@ data/
 
 # Generated benchmark outputs and figures
 results/
+benchmark_sigma2/
+benchmark_sigma2_smoke/

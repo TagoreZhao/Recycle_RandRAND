@@ -7,3 +7,7 @@ symindefinite/stokes_immersed_rotor/output/
 # linear_solves preconditioner test bed (regenerated on run)
 symindefinite/linear_solves/output/
 symindefinite/linear_solves/*.mat
+
+# AMG subspace-capture ablation outputs (regenerated on run)
+amg_subspace/output/
+amg_subspace/output_smoke/
