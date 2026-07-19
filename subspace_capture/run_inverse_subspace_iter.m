@@ -1,59 +1,67 @@
-q% RUN_INVERSE_SUBSPACE_ITER  Exact-inverse subspace-iteration capture study.
+% RUN_INVERSE_SUBSPACE_ITER  Exact-inverse subspace-iteration capture study.
 %
-% Studies how PLAIN subspace iteration driven by the EXACT INVERSE of the
-% preconditioned operator captures the smallest eigenvectors of that operator,
-% and how the captured subspace evolves as the number of iterations grows.
-%
-% Iteration operator (exact inverse of the symmetric preconditioned operator):
-%   Z = Tsym^{-1} = L^T A^{-1} L,   Tsym = L^{-1} A L^{-T},  L = ichol(A,'nofill').
-% Plain power iteration with this Z drives a starting block toward the dominant
-% eigenvectors of Tsym^{-1} == the SMALLEST eigenvectors of Tsym.  We use
+% Studies how PLAIN subspace iteration driven by the EXACT INVERSE of an SPD
+% operator captures that operator's smallest eigenvectors, and how the captured
+% subspace evolves as the number of iterations grows.  TWO systems are run with
+% identical methodology so they can be compared side by side:
+%   Tsym : the split-preconditioned operator
+%          Z = Tsym^{-1} = L^T A^{-1} L,  Tsym = L^{-1} A L^{-T},  L = ichol(A,'nofill')
+%   A    : the ORIGINAL linear system,  Z = A^{-1}
+% Plain power iteration with Z drives a starting block toward the dominant
+% eigenvectors of Z == the SMALLEST eigenvectors of the system operator.  We use
 % src.precond.subspace_iter_plain (NO re-orthogonalization inside the loop);
 % the single orthonormalization is the pivoted QR inside the capture metric.
+% As a stability ablation, the gaussian block additionally runs inverse_reorth
+% (src.precond.subspace_iter): the same q exact solves but with orth after
+% EVERY solve, in both systems.
 %
 % Four starting blocks are compared in two matched-width ablation pairs, all
-% built from the preconditioned operator T:
-%   width m     : gaussian        = randn(n,m)         vs  sketched_tent_T = Pt_T*randn(nc_T,m)
-%   width nc_T  : gaussian_tent   = randn(n,nc_T)      vs  tent_T          = full(Pt_T)
-% (nc_T >= m is the raw tentative width.)  This isolates "tentative vs Gaussian"
-% at each width.
+% built from that system's own tentative prolongator Pt (aggregation on the
+% sparsified Tsym for the Tsym row, on the sparse A directly for the A row):
+%   width m   : gaussian      = randn(n,m)       vs  sketched_tent = Pt*randn(nc,m)
+%   width nc  : gaussian_tent = randn(n,nc)      vs  tent          = full(Pt)
+% (nc >= m is the raw tentative width, per system.)  This isolates "tentative
+% vs Gaussian" at each width.
 %
-% Two POLYNOMIAL-FILTER families are overlaid on the same two panels (only for
-% the width-m blocks gaussian / sketched_tent_T), so all methods share one
-% x-axis q = number of operator applications:
-%   chebyshev : src.precond.chebyshev_apply  -- high-pass T_q on forward Tsym (q matvecs)
-%   power_iz  : src.precond.min_subspace_iter -- (I - Tsym/lam_max)^q          (q matvecs)
-% For the inverse method q is the iteration power (q exact Tsym^{-1} solves);
-% for the polynomial filters q is the degree.  This contrasts the fast-but-
-% unstable exact inverse against the slower-but-stable polynomial filters.
+% Two POLYNOMIAL-FILTER families are overlaid on the same panels (only for
+% the width-m blocks gaussian / sketched_tent, in BOTH systems), so all
+% methods share one x-axis q = number of operator applications:
+%   chebyshev : src.precond.chebyshev_apply  -- high-pass T_q on the forward op (q matvecs)
+%   power_iz  : src.precond.min_subspace_iter -- (I - Op/lam_max)^q             (q matvecs)
+% For the inverse method q is the iteration power (q exact solves); for the
+% polynomial filters q is the degree.  This contrasts the fast-but-unstable
+% exact inverse against the slower-but-stable polynomial filters.
 %
 % Capture metric (basis-invariant): directed principal-angle sines from
 % span(V_true) into span(Q), via the local subspace_capture_directed.
 %
-% Outputs (subspace_capture/output_inverse_iter/):
-%   results.mat / results.csv
-%   eigspace_err2_inv.pdf           — ||(I-P)Q_true||_2 (log y) vs iteration q
-%   angle_capture_fraction_inv.pdf  — fraction of directions with
-%                                     sin(theta)<1% vs iteration q
-%   kappa_ratio_inv.pdf             — kappa_approx/kappa_exact of the two-level
-%                                     deflated system (log y) vs iteration q,
-%                                     via the local deflated_cond_two_level
-%                                     (kappa_exact = deflation with V_true;
-%                                     analytically lam_max/lam_cut)
-%   pcg_iters_inv.pdf               — downstream PCG iterations to converge vs
-%                                     iteration q.  PCG solves the ORIGINAL
-%                                     system A x = b, preconditioned by the
-%                                     split two-level operator B = L^-T P L^-1
-%                                     (5th pcg arg); the deflation operator P is
-%                                     BUILT on Ahat = Tsym from the captured
-%                                     basis Q (src.precond.deflation_P_apply).
-%                                     The exact-deflation (V_true) iteration
-%                                     count is drawn as a dashed floor.
-%   aggregate_1x4.png               — all four panels side by side (convenience)
+% Downstream PCG (pcg_iters panels): both rows solve the SAME original system
+% A x = b; only the preconditioner differs:
+%   Tsym row : split two-level operator B = L^-T P L^-1, P built on Ahat = Tsym
+%              from the captured basis Q (src.precond.deflation_P_apply)
+%   A row    : deflation-only operator B = P, P built directly on A
+% The exact-deflation (V_true) iteration count of each row is drawn as a
+% dashed floor in its panel.
 %
-% Ground truth (smallest k eigenvectors of Tsym) is read from the cache that
-% run_subspace_capture.m already populated (output/cache/eigsTsym_k500.mat); no
-% eigendecomposition is recomputed if that cache is present.
+% Outputs (subspace_capture/output_inverse_iter/):
+%   results.mat / results.csv        (rows carry a `system` column: Tsym | A)
+%   eigspace_err2_inv[_A].pdf           — ||(I-P)Q_true||_2 (log y) vs iteration q
+%   angle_capture_fraction_inv[_A].pdf  — fraction of directions with
+%                                         sin(theta)<1% vs iteration q
+%   kappa_ratio_inv[_A].pdf             — kappa_approx/kappa_exact of the
+%                                         two-level deflated system (log y) vs
+%                                         iteration q, via the local
+%                                         deflated_cond_two_level (kappa_exact =
+%                                         deflation with V_true; analytically
+%                                         lam_max/lam_cut)
+%   pcg_iters_inv[_A].pdf               — downstream PCG iterations to converge
+%                                         vs iteration q (see above)
+%   aggregate_2x4.png               — all panels, row 1 = Tsym, row 2 = A
+%
+% Ground truth (smallest k eigenvectors of each operator) is read from the
+% caches that run_subspace_capture.m already populated
+% (output/cache/eigsTsym_k500.mat, output/cache/eigsA_k500.mat); no
+% eigendecomposition is recomputed if those caches are present.
 %
 % Usage:
 %   cd subspace_capture
@@ -96,14 +104,18 @@ bbox      = [-1 1 -1 1];         % unit-sphere x,y extent for the cosine modes
 pcg_tol   = 1e-8;                % PCG convergence tolerance
 pcg_maxit = 400;                 % PCG iteration cap
 
-P0_kinds = {'gaussian', 'sketched_tent_T', 'tent_T', 'gaussian_tent'};
+P0_kinds = {'gaussian', 'sketched_tent', 'tent', 'gaussian_tent'};
 
 % Methods sharing the common x-axis q (= operator applications):
-%   inverse   : plain subspace iteration with Z = Tsym^{-1} (q exact solves)
-%   chebyshev : Chebyshev high-pass filter on forward Tsym  (q matvecs)
-%   power_iz  : damped power filter (I - Tsym/lam_max)^q     (q matvecs)
+%   inverse   : plain subspace iteration with Z = Op^{-1}  (q exact solves)
+%   chebyshev : Chebyshev high-pass filter on the forward op (q matvecs)
+%   power_iz  : damped power filter (I - Op/lam_max)^q       (q matvecs)
 % The polynomial filters are overlaid only on the two width-m blocks.
-poly_blocks = {'gaussian', 'sketched_tent_T'};
+poly_blocks = {'gaussian', 'sketched_tent'};
+
+% Reorth ablation of the exact-inverse method (inverse_reorth =
+% src.precond.subspace_iter, orth after every solve), gaussian block only.
+reorth_blocks = {'gaussian'};
 
 %% --- Build baseline snapshot A + L ----------------------------------------
 fprintf('\n--- Building sphere snapshot (h0=%.4g, %s) ---\n', h0, mesh_method);
@@ -113,20 +125,27 @@ Lt = L';
 fprintf('A: %d x %d, nnz=%d, sym=%d   nnz(L)=%d\n', ...
         size(A,1), size(A,2), nnz(A), issymmetric(A), nnz(L));
 
-%% --- Ground-truth small eigenpairs of Tsym (read from existing cache) ------
-[V_true_T, lam_cut, ~] = load_or_compute_eigs_Tsym(cacheDir, A, L, k);
-fprintf('V_true (smallest %d eigvecs of Tsym): %d x %d  (lam_cut=%.4e)\n', ...
-        k, size(V_true_T,1), size(V_true_T,2), lam_cut);
+%% --- Ground-truth small eigenpairs of Tsym and A (read from existing caches)
+[V_true_T, lam_cut_T, ~] = load_or_compute_eigs_Tsym(cacheDir, A, L, k);
+fprintf('V_true_T (smallest %d eigvecs of Tsym): %d x %d  (lam_cut=%.4e)\n', ...
+        k, size(V_true_T,1), size(V_true_T,2), lam_cut_T);
+[V_true_A, lam_cut_A, ~] = load_or_compute_eigs_A(cacheDir, A, k);
+fprintf('V_true_A (smallest %d eigvecs of A):    %d x %d  (lam_cut=%.4e)\n', ...
+        k, size(V_true_A,1), size(V_true_A,2), lam_cut_A);
 
 %% --- Operators -------------------------------------------------------------
-% Exact inverse  Z = Tsym^{-1} = L^T A^{-1} L  (for the 'inverse' method).
-dA        = decomposition(A, 'chol');
-invApply  = @(X) Lt * (dA \ (L * X));
-% Forward Tsym = L^{-1} A L^{-T}  (for the polynomial-filter methods).
-Zfun_Tsym = @(X) L \ (A * (Lt \ X));
-% Top of the Tsym spectrum (reused from cache) -- needed by the poly filters.
+% One Cholesky factorization of A serves both exact inverses:
+%   Tsym^{-1} = L^T A^{-1} L   and   A^{-1}.
+dA         = decomposition(A, 'chol');
+invApply_T = @(X) Lt * (dA \ (L * X));
+invApply_A = @(X) dA \ X;
+% Forward operators (for the polynomial-filter methods and deflation builds).
+Zfun_Tsym  = @(X) L \ (A * (Lt \ X));
+Zfun_A     = @(X) A * X;
+% Top of each spectrum (reused from cache) -- needed by the poly filters.
 lam_max_T = load_or_compute_lam_max(cacheDir, 'Tsym', Zfun_Tsym, n);
-fprintf('lam_max(Tsym) = %.4e\n', lam_max_T);
+lam_max_A = load_or_compute_lam_max(cacheDir, 'A', A, n);
+fprintf('lam_max(Tsym) = %.4e   lam_max(A) = %.4e\n', lam_max_T, lam_max_A);
 
 % KL-noise RHS for the downstream split two-level PCG solve (mirrors
 % run_krylov_capture.m:101-107).  (P)CG normalizes the RHS internally, so
@@ -138,28 +157,8 @@ z     = randn(Kmodes, 1);
 b_pcg = sigma * sqrt(dt) * (msh.D_II * (Phi * z));           % exact solver rhsI
 fprintf('PCG RHS b: Kmodes=%d, seed=%d, ||b||=%.4e\n', Kmodes, seed, norm(b_pcg));
 
-% Condition number of the EXACTLY deflated two-level system (W = V_true_T),
-% computed once; every sweep point is reported relative to it.
-condOpts  = struct('eigs_tol', 1e-8, 'eigs_maxit', 5000);   % per-point (raw W)
-exactOpts = struct('eigs_tol', 1e-8, 'eigs_maxit', 5000, 'W_is_orth', true);
-exactCond = deflated_cond_two_level(V_true_T, Zfun_Tsym, invApply, lam_cut, n, ...
-                                    exactOpts);
-if ~exactCond.ok
-    error('run_inverse_subspace_iter:kappaExactFailed', ...
-          'kappa_exact computation failed: %s', exactCond.err);
-end
-kappa_exact = exactCond.kappa;
-fprintf('kappa_exact = %.6e  (analytic lam_max_T/lam_cut = %.6e)\n', ...
-        kappa_exact, lam_max_T / lam_cut);
-
-% Downstream PCG iteration count of the EXACTLY deflated split two-level
-% system (W = V_true_T): the best-achievable floor, drawn as a reference line
-% in the pcg_iters panel (analogous to kappa_exact for kappa_ratio).
-pcg_iters_exact = split_two_level_pcg_iters(V_true_T, A, L, Lt, Zfun_Tsym, ...
-                                            lam_cut, b_pcg, pcg_tol, pcg_maxit);
-fprintf('pcg_iters_exact = %g  (split two-level, W = V_true_T)\n', pcg_iters_exact);
-
-%% --- Tentative prolongator from the preconditioned operator T --------------
+%% --- Tentative prolongators (one per system) --------------------------------
+% Tsym must first be materialized and sparsified; A is already sparse.
 T_sparse = build_Tsym_sparse(L, Lt, A, drop_rel_tol);
 fprintf(['Tsym sparsification: nnz=%d (%.2f%% of n^2), ', ...
          'max|T|=%.3e\n'], ...
@@ -167,54 +166,108 @@ fprintf(['Tsym sparsification: nnz=%d (%.2f%% of n^2), ', ...
         max(abs(nonzeros(T_sparse))));
 [Pt_T, nc_T] = build_tent_at_least(T_sparse, theta, maxAggSize, m);
 fprintf('Pt_T: nc=%d  (m=%d, maxAggSize=%d)\n', nc_T, m, maxAggSize);
+[Pt_A, nc_A] = build_tent_at_least(A, theta, maxAggSize, m);
+fprintf('Pt_A: nc=%d  (m=%d, maxAggSize=%d)\n', nc_A, m, maxAggSize);
 
-%% --- Pre-build all four P0 blocks -----------------------------------------
+%% --- The two systems (identical methodology, side-by-side comparison) ------
+% makeB wraps the deflation projector P (built on that system's operator with
+% tau = its lam_cut) into pcg's preconditioner for the SHARED solve A x = b:
+%   Tsym : split two-level  B = L^-T P L^-1
+%   A    : deflation-only   B = P
+systems = struct( ...
+    'name',       {'Tsym',                          'A'}, ...
+    'zlabel',     {'Tsym^{-1}',                     'A^{-1}'}, ...
+    'Zfun',       {Zfun_Tsym,                       Zfun_A}, ...
+    'invApply',   {invApply_T,                      invApply_A}, ...
+    'V_true',     {V_true_T,                        V_true_A}, ...
+    'lam_cut',    {lam_cut_T,                       lam_cut_A}, ...
+    'lam_max',    {lam_max_T,                       lam_max_A}, ...
+    'Pt',         {Pt_T,                            Pt_A}, ...
+    'nc',         {nc_T,                            nc_A}, ...
+    'makeB',      {@(Papply) @(r) Lt \ (Papply(L \ r)), @(Papply) @(r) Papply(r)}, ...
+    'tag_suffix', {'',                              '_A'}, ...
+    'kappa_exact', {NaN, NaN}, 'pcg_iters_exact', {NaN, NaN});
+
+% Exact floors per system: condition number and downstream PCG iterations of
+% the EXACTLY deflated system (W = V_true); every sweep point is reported
+% relative to them.
+condOpts  = struct('eigs_tol', 1e-8, 'eigs_maxit', 5000);   % per-point (raw W)
+exactOpts = struct('eigs_tol', 1e-8, 'eigs_maxit', 5000, 'W_is_orth', true);
+for is = 1:numel(systems)
+    sys = systems(is);
+    exactCond = deflated_cond_two_level(sys.V_true, sys.Zfun, sys.invApply, ...
+                                        sys.lam_cut, n, exactOpts);
+    if ~exactCond.ok
+        error('run_inverse_subspace_iter:kappaExactFailed', ...
+              '[%s] kappa_exact computation failed: %s', sys.name, exactCond.err);
+    end
+    systems(is).kappa_exact = exactCond.kappa;
+    systems(is).pcg_iters_exact = two_level_pcg_iters( ...
+        sys.V_true, A, sys.Zfun, sys.lam_cut, sys.makeB, ...
+        b_pcg, pcg_tol, pcg_maxit);
+    fprintf(['[%-4s] kappa_exact = %.6e  (analytic lam_max/lam_cut = %.6e)', ...
+             '   pcg_iters_exact = %g\n'], ...
+            sys.name, systems(is).kappa_exact, sys.lam_max / sys.lam_cut, ...
+            systems(is).pcg_iters_exact);
+end
+
+%% --- Pre-build the four P0 blocks per system -------------------------------
+% rng(seed) before every build: the width-m 'gaussian' block is bit-identical
+% across the two systems; the tent-width blocks differ only through Pt/nc.
 P0_cache = struct();
-for ik = 1:numel(P0_kinds)
-    kind = P0_kinds{ik};
-    rng(seed);
-    [P0, ncols] = build_P0(kind, Pt_T, nc_T, n, m);
-    P0_cache.(kind).P  = P0;
-    P0_cache.(kind).nc = ncols;
-    fprintf('P0 %-16s: %d x %d\n', kind, size(P0,1), ncols);
+for is = 1:numel(systems)
+    sysName = systems(is).name;
+    for ik = 1:numel(P0_kinds)
+        kind = P0_kinds{ik};
+        rng(seed);
+        [P0, ncols] = build_P0(kind, systems(is).Pt, systems(is).nc, n, m);
+        P0_cache.(sysName).(kind).P  = P0;
+        P0_cache.(sysName).(kind).nc = ncols;
+        fprintf('P0 [%-4s] %-14s: %d x %d\n', sysName, kind, size(P0,1), ncols);
+    end
 end
 
 %% --- Sweep ----------------------------------------------------------------
-% Operator handles + spectral bounds shared by the per-q runs.
-ops = struct('invApply', invApply, 'Zfun_Tsym', Zfun_Tsym, ...
-             'lam_cut', lam_cut, 'lam_max', lam_max_T, 'n', n, ...
-             'kappa_exact', kappa_exact, 'condOpts', condOpts, ...
-             'A', A, 'L', L, 'Lt', Lt, ...
-             'b_pcg', b_pcg, 'pcg_tol', pcg_tol, 'pcg_maxit', pcg_maxit);
-
 rows = [];
-for ik = 1:numel(P0_kinds)
-    kind  = P0_kinds{ik};
-    P0    = P0_cache.(kind).P;
-    ncols = P0_cache.(kind).nc;
+for is = 1:numel(systems)
+    sys = systems(is);
+    % Operator handles + spectral bounds shared by this system's per-q runs.
+    ops = struct('invApply', sys.invApply, 'Zfun', sys.Zfun, ...
+                 'lam_cut', sys.lam_cut, 'lam_max', sys.lam_max, 'n', n, ...
+                 'kappa_exact', sys.kappa_exact, 'condOpts', condOpts, ...
+                 'A', A, 'makeB', sys.makeB, ...
+                 'b_pcg', b_pcg, 'pcg_tol', pcg_tol, 'pcg_maxit', pcg_maxit);
 
-    % Inverse iteration for every block; polynomial filters only on width-m blocks.
-    if any(strcmp(kind, poly_blocks))
-        methods = {'inverse', 'chebyshev', 'power_iz'};
-    else
-        methods = {'inverse'};
-    end
+    for ik = 1:numel(P0_kinds)
+        kind  = P0_kinds{ik};
+        P0    = P0_cache.(sys.name).(kind).P;
+        ncols = P0_cache.(sys.name).(kind).nc;
 
-    for im = 1:numel(methods)
-        method = methods{im};
-        for iq = 1:numel(iters)
-            q    = iters(iq);
-            info = run_one_method(method, ops, P0, q, V_true_T);
-            info.P0_kind  = kind;
-            info.P0_ncols = ncols;
-            info.method   = method;
-            info.iter     = q;
-            rows = [rows; info];                                      %#ok<AGROW>
-            fprintf(['  %-16s %-10s q=%2d : err_2=%.3e  angle_capture=%.3f', ...
-                     '  kappa_ratio=%.3e  pcg_iters=%g\n'], ...
-                    kind, method, q, info.eigspace_err_2, ...
-                    info.angle_capture_frac_1pct, info.kappa_ratio, ...
-                    info.pcg_iters);
+        % Inverse iteration for every block; reorth ablation on the gaussian
+        % block; polynomial filters only on the width-m blocks.
+        all_methods = {'inverse', 'inverse_reorth', 'chebyshev', 'power_iz'};
+        is_poly     = any(strcmp(kind, poly_blocks));
+        methods     = all_methods([true, any(strcmp(kind, reorth_blocks)), ...
+                                   is_poly, is_poly]);
+
+        for im = 1:numel(methods)
+            method = methods{im};
+            for iq = 1:numel(iters)
+                q    = iters(iq);
+                info = run_one_method(method, ops, P0, q, sys.V_true);
+                info.system   = sys.name;
+                info.P0_kind  = kind;
+                info.P0_ncols = ncols;
+                info.method   = method;
+                info.iter     = q;
+                rows = [rows; info];                                  %#ok<AGROW>
+                fprintf(['  [%-4s] %-14s %-10s q=%2d : err_2=%.3e', ...
+                         '  angle_capture=%.3f  kappa_ratio=%.3e', ...
+                         '  pcg_iters=%g\n'], ...
+                        sys.name, kind, method, q, info.eigspace_err_2, ...
+                        info.angle_capture_frac_1pct, info.kappa_ratio, ...
+                        info.pcg_iters);
+            end
         end
     end
 end
@@ -222,19 +275,26 @@ end
 %% --- Save -----------------------------------------------------------------
 meta = struct('n', n, 'k', k, 'm', m, 'iters', iters, ...
               'contrast', contrast, 'h0', h0, 't_snap', t_snap, ...
-              'nc_T', nc_T, 'Z', 'Tsym_inverse', ...
-              'lam_cut', lam_cut, 'lam_max_T', lam_max_T, ...
-              'kappa_exact', kappa_exact, ...
-              'pcg_iters_exact', pcg_iters_exact, ...
+              'systems', {{systems.name}}, ...
+              'nc_T', nc_T, 'nc_A', nc_A, ...
+              'lam_cut_T', lam_cut_T, 'lam_max_T', lam_max_T, ...
+              'lam_cut_A', lam_cut_A, 'lam_max_A', lam_max_A, ...
+              'kappa_exact_T', systems(1).kappa_exact, ...
+              'kappa_exact_A', systems(2).kappa_exact, ...
+              'pcg_iters_exact_T', systems(1).pcg_iters_exact, ...
+              'pcg_iters_exact_A', systems(2).pcg_iters_exact, ...
               'Kmodes', Kmodes, 'seed', seed, ...
               'pcg_tol', pcg_tol, 'pcg_maxit', pcg_maxit);
 save(fullfile(outDir, 'results.mat'), 'rows', 'meta', '-v7');
 write_results_csv(fullfile(outDir, 'results.csv'), rows);
 fprintf('\nresults.mat and results.csv written to:\n  %s\n', outDir);
 
-%% --- Render the two plots --------------------------------------------------
+%% --- Render the plots -------------------------------------------------------
 fprintf('\n--- Rendering plots ---\n');
-make_inverse_plots(rows, outDir, pcg_iters_exact);
+sysPlot = struct('name', {systems.name}, 'zlabel', {systems.zlabel}, ...
+                 'pcg_iters_exact', {systems.pcg_iters_exact}, ...
+                 'tag_suffix', {systems.tag_suffix});
+make_inverse_plots(rows, outDir, sysPlot);
 
 fprintf('\nDone.\n');
 
@@ -302,6 +362,34 @@ function [V_true, lam_cut, lam_first] = load_or_compute_eigs_Tsym(cacheDir, A, L
     lam_first = D(1);
 end
 
+function [V_true, lam_cut, lam_first] = load_or_compute_eigs_A(cacheDir, A, k)
+%LOAD_OR_COMPUTE_EIGS_A  Smallest k+1 eigenpairs of the original matrix A.
+%   Same cache convention as run_subspace_capture.m (eigsA_k%d.mat).  Returns
+%   first k vecs, the cutoff D(k+1), and the smallest eigenvalue D(1).
+    cachePath = fullfile(cacheDir, sprintf('eigsA_k%d.mat', k));
+    if isfile(cachePath)
+        S = load(cachePath, 'V', 'D');
+        V_true    = S.V(:, 1:k);
+        lam_cut   = S.D(k + 1);
+        lam_first = S.D(1);
+        fprintf('Loaded cached %s\n', cachePath);
+        return;
+    end
+    fprintf('Computing smallest %d eigenpairs of A (one-time)...\n', k + 1);
+    t0 = tic;
+    % Name-value options, NOT the legacy opts struct: eigs silently ignores
+    % struct fields with these capitalized names.
+    [Vraw, Dmat] = eigs(A, k + 1, 'smallestabs', ...
+                        'Tolerance', 1e-10, 'MaxIterations', 5000);
+    [D, idx]     = sort(real(diag(Dmat)), 'ascend');
+    V            = real(Vraw(:, idx));
+    fprintf('  done in %.1f s\n', toc(t0));
+    save(cachePath, 'V', 'D', 'k', '-v7');
+    V_true    = V(:, 1:k);
+    lam_cut   = D(k + 1);
+    lam_first = D(1);
+end
+
 function T_sparse = build_Tsym_sparse(L, Lt, A, drop_rel_tol)
 %BUILD_TSYM_SPARSE  Materialize Tsym = L^{-1} A L^{-T}, symmetrize, drop near-zeros.
     Tdense = (L \ full(A)) / Lt;
@@ -336,22 +424,22 @@ function [Pt, nc] = build_tent_at_least(M, theta, maxAggSize, m_min)
     Pt = Pt_lo;  nc = nc_lo;
 end
 
-function [P0, ncols] = build_P0(kind, Pt_T, nc_T, n, m)
-%BUILD_P0  Construct one of the four starting blocks, all from the T tentative.
+function [P0, ncols] = build_P0(kind, Pt, nc, n, m)
+%BUILD_P0  Construct one of the four starting blocks from a system's tentative.
     switch kind
         case 'gaussian'                 % width m
             P0    = randn(n, m);
             ncols = m;
-        case 'sketched_tent_T'          % width m
-            G     = randn(nc_T, m);
-            P0    = Pt_T * G;
+        case 'sketched_tent'            % width m
+            G     = randn(nc, m);
+            P0    = Pt * G;
             ncols = m;
-        case 'tent_T'                   % width nc_T (raw tentative)
-            P0    = full(Pt_T);
-            ncols = nc_T;
-        case 'gaussian_tent'            % width nc_T (Gaussian matched to raw tentative)
-            P0    = randn(n, nc_T);
-            ncols = nc_T;
+        case 'tent'                     % width nc (raw tentative)
+            P0    = full(Pt);
+            ncols = nc;
+        case 'gaussian_tent'            % width nc (Gaussian matched to raw tentative)
+            P0    = randn(n, nc);
+            ncols = nc;
         otherwise
             error('build_P0: unknown kind %s', kind);
     end
@@ -359,13 +447,17 @@ end
 
 function info = run_one_method(method, ops, P0, q, V_true)
 %RUN_ONE_METHOD  Apply one method at "work level" q, then measure capture.
+%   ops carries one system's operators (Zfun forward, invApply exact inverse)
+%   and spectral bounds; the same code path serves Tsym and A.
 %   q counts operator applications for all methods:
-%     inverse   : q plain applications of Z = Tsym^{-1} (no reorth).
-%     chebyshev : degree-q Chebyshev high-pass filter on forward Tsym.
-%     power_iz  : degree-q damped power filter (I - Tsym/lam_max)^q (final orth
-%                 done inside min_subspace_iter).
+%     inverse        : q plain applications of Z = Op^{-1} (no reorth).
+%     inverse_reorth : q applications of Z = Op^{-1} with orth after EVERY
+%                      solve (src.precond.subspace_iter); output orthonormal.
+%     chebyshev      : degree-q Chebyshev high-pass filter on the forward op.
+%     power_iz       : degree-q damped power filter (I - Op/lam_max)^q (final
+%                      orth done inside min_subspace_iter).
 %   inverse/chebyshev pass the RAW block: the metric's pivoted QR is the
-%   single orthonormalization.  At q=0 all three reduce to orth-of-P0 -- a
+%   single orthonormalization.  At q=0 all methods reduce to orth-of-P0 -- a
 %   built-in consistency check.
     info = new_capture_info();
     t0   = tic;
@@ -374,14 +466,18 @@ function info = run_one_method(method, ops, P0, q, V_true)
             case 'inverse'
                 Q = src.precond.subspace_iter_plain(ops.invApply, P0, q);
                 Q_is_orth = false;
+            case 'inverse_reorth'
+                % subspace_iter orths the start block and after every apply.
+                Q = src.precond.subspace_iter(ops.invApply, P0, q);
+                Q_is_orth = true;
             case 'chebyshev'
-                Q = src.precond.chebyshev_apply(ops.Zfun_Tsym, P0, q, ...
+                Q = src.precond.chebyshev_apply(ops.Zfun, P0, q, ...
                                                 ops.lam_cut, ops.lam_max);
                 Q_is_orth = false;
             case 'power_iz'
                 Dinv = (1 / ops.lam_max) * ones(ops.n, 1);
                 % min_subspace_iter ends with orth(Y) => output orthonormal.
-                Q = src.precond.min_subspace_iter(ops.Zfun_Tsym, P0, q, ...
+                Q = src.precond.min_subspace_iter(ops.Zfun, P0, q, ...
                                                   Dinv, 1.0, false);
                 Q_is_orth = true;
             otherwise
@@ -390,19 +486,21 @@ function info = run_one_method(method, ops, P0, q, V_true)
         info = fill_capture_info(info, V_true, Q, Q_is_orth);
         % Two-level deflated condition number with W = orth(range(Q)); a
         % failed estimate leaves NaN without invalidating the capture row.
-        c = deflated_cond_two_level(Q, ops.Zfun_Tsym, ops.invApply, ...
+        c = deflated_cond_two_level(Q, ops.Zfun, ops.invApply, ...
                                     ops.lam_cut, ops.n, ops.condOpts);
         info.kappa_approx = c.kappa;
         info.kappa_ratio  = c.kappa / ops.kappa_exact;
         info.r_defl       = c.r;
 
-        % Downstream cost: iterations of the split two-level deflated PCG
-        % (B = L^-T P L^-1 on Ahat = Tsym) using the captured basis Q as the
-        % deflation set -- the empirical companion of kappa_ratio.  A poorly
-        % captured Q (non-SPD coarse matrix) throws inside deflation_P_apply
-        % and is caught below, leaving pcg_iters = NaN without dropping the row.
-        info.pcg_iters = split_two_level_pcg_iters( ...
-            Q, ops.A, ops.L, ops.Lt, ops.Zfun_Tsym, ops.lam_cut, ...
+        % Downstream cost: iterations of the deflated PCG on A x = b using the
+        % captured basis Q as the deflation set -- the empirical companion of
+        % kappa_ratio.  P is built on this system's operator; ops.makeB wraps
+        % it into the preconditioner (split L^-T P L^-1 for Tsym, plain P for
+        % A).  A poorly captured Q (non-SPD coarse matrix) throws inside
+        % deflation_P_apply and is caught below, leaving pcg_iters = NaN
+        % without dropping the row.
+        info.pcg_iters = two_level_pcg_iters( ...
+            Q, ops.A, ops.Zfun, ops.lam_cut, ops.makeB, ...
             ops.b_pcg, ops.pcg_tol, ops.pcg_maxit);
     catch ME
         info.err = regexprep(ME.message, '\n.*', '');
@@ -412,24 +510,25 @@ function info = run_one_method(method, ops, P0, q, V_true)
     info.time_seconds = toc(t0);
 end
 
-function it = split_two_level_pcg_iters(W, A, L, Lt, Zfun_Tsym, tau, b, tol, maxit)
-%SPLIT_TWO_LEVEL_PCG_ITERS  PCG iterations for A x = b with a two-level precond.
+function it = two_level_pcg_iters(W, A, Zfun, tau, makeB, b, tol, maxit)
+%TWO_LEVEL_PCG_ITERS  PCG iterations for A x = b with a deflation preconditioner.
 %   Runs pcg on the ORIGINAL system A x = b (pcg's matrix arg is @(X) A*X, RHS
-%   is the raw b), preconditioned by the split two-level operator
-%   B = L^-T P L^-1 (pcg's 5th arg).  The deflation operator P is BUILT on
-%   Ahat = Tsym = L^-1 A L^-T from the deflation basis span(W)
-%   (src.precond.deflation_P_apply, tau = lam_cut).  The solve is NOT run on
-%   Ahat -- only P is defined there.  This is the exact scheme used by
-%   solve_two_level in the repo's benchmarks (GP_train/ccpp/run_benchmark.m,
-%   +src/+solver/solve_deflate_M_P.m).
+%   is the raw b).  The deflation operator P is BUILT on the system operator
+%   Zfun from the deflation basis span(W) (src.precond.deflation_P_apply,
+%   tau = that system's lam_cut); makeB(Papply) wraps it into pcg's
+%   preconditioner (5th arg):
+%     Tsym row : makeB = @(P) @(r) Lt \ (P(L \ r))  -- split B = L^-T P L^-1,
+%                the exact scheme used by solve_two_level in the repo's
+%                benchmarks (+src/+solver/solve_deflate_M_P.m)
+%     A row    : makeB = @(P) @(r) P(r)             -- deflation-only B = P
 %
 %   Returns the pcg iteration count (4th output of pcg), or NaN if the coarse
-%   matrix W'*Tsym*W is not numerically SPD (deflation_P_apply throws on the
+%   matrix W'*Op*W is not numerically SPD (deflation_P_apply throws on the
 %   chol) or pcg errors -- a failure never invalidates the capture row.
     try
         Wd     = orth(full(W));                     % orthonormal deflation basis
-        Papply = src.precond.deflation_P_apply(Wd, Zfun_Tsym, tau);
-        Bapply = @(r) Lt \ (Papply(L \ r));         % B = L^-T P L^-1
+        Papply = src.precond.deflation_P_apply(Wd, Zfun, tau);
+        Bapply = makeB(Papply);
         [~, ~, ~, it] = pcg(@(X) A * X, b, tol, maxit, @(r) Bapply(r));
     catch
         it = NaN;
@@ -492,14 +591,14 @@ end
 function write_results_csv(csvPath, rows)
 %WRITE_RESULTS_CSV  Flat CSV of the sweep results (directed-angle metrics).
     fid = fopen(csvPath, 'w');
-    fprintf(fid, ['P0_kind,method,P0_ncols,iter,', ...
+    fprintf(fid, ['system,P0_kind,method,P0_ncols,iter,', ...
                   'eigspace_err_2,eigspace_err_fro,angle_capture_frac_1pct,', ...
                   'n_angle_below_1pct,n_angle_below_0p1pct,r_true,r_comp,', ...
                   'kappa_approx,kappa_ratio,r_defl,pcg_iters,time_seconds\n']);
     for i = 1:numel(rows)
         r = rows(i);
-        fprintf(fid, '%s,%s,%d,%d,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g\n', ...
-                r.P0_kind, r.method, r.P0_ncols, r.iter, ...
+        fprintf(fid, '%s,%s,%s,%d,%d,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g\n', ...
+                r.system, r.P0_kind, r.method, r.P0_ncols, r.iter, ...
                 r.eigspace_err_2, r.eigspace_err_fro, ...
                 r.angle_capture_frac_1pct, ...
                 r.n_angle_below_1pct, r.n_angle_below_0p1pct, ...
@@ -558,14 +657,15 @@ function kvec = generate_kvec(K)
 end
 
 %% =========================================================================
-%% Rendering: two plots (+ aggregate PNG)
+%% Rendering: per-system panels (+ 2x4 aggregate PNG)
 %% =========================================================================
-function make_inverse_plots(rows, out_dir, pcg_iters_exact)
-%MAKE_INVERSE_PLOTS  Four capture/cost plots vs iteration count, series each.
-%   pcg_iters_exact is the best-achievable PCG iteration count (exact V_true
-%   deflation), drawn as a reference line in the pcg_iters panel.
+function make_inverse_plots(rows, out_dir, sysPlot)
+%MAKE_INVERSE_PLOTS  Four capture/cost panels per system vs iteration count.
+%   sysPlot is a struct array (name, zlabel, pcg_iters_exact, tag_suffix), one
+%   entry per system.  Each system gets its own four PDFs (the Tsym suffix is
+%   '' so the historical filenames are unchanged; the A row appends '_A'), and
+%   the aggregate PNG is a 2x4 grid: row 1 = Tsym, row 2 = A.
     if ~exist(out_dir, 'dir'), mkdir(out_dir); end
-    if nargin < 3, pcg_iters_exact = NaN; end
 
     specs = struct( ...
         'metric', {'eigspace_err_2',        'angle_capture_frac_1pct',              'kappa_ratio',                      'pcg_iters'}, ...
@@ -575,37 +675,50 @@ function make_inverse_plots(rows, out_dir, pcg_iters_exact)
         'legloc', {'southwest',             'northeast',                            'northeast',                        'northeast'}, ...
         'tag',    {'eigspace_err2_inv',     'angle_capture_fraction_inv',           'kappa_ratio_inv',                  'pcg_iters_inv'});
 
-    for ip = 1:numel(specs)
-        fig = figure('Visible', 'off', 'Units', 'inches', ...
-                     'Position', [0 0 5.4 3.4], 'Color', 'w');
-        draw_inverse_panel(axes(fig), rows, specs(ip), pcg_iters_exact);
-        outfile = fullfile(out_dir, [specs(ip).tag '.pdf']);
-        exportgraphics(fig, outfile, 'ContentType', 'vector');
-        close(fig);
-        fprintf('Wrote %s\n', outfile);
+    for is = 1:numel(sysPlot)
+        sp     = sysPlot(is);
+        rows_s = rows(strcmp({rows.system}, sp.name));
+        for ip = 1:numel(specs)
+            fig = figure('Visible', 'off', 'Units', 'inches', ...
+                         'Position', [0 0 5.4 3.4], 'Color', 'w');
+            draw_inverse_panel(axes(fig), rows_s, specs(ip), ...
+                               sp.pcg_iters_exact, sp.zlabel);
+            outfile = fullfile(out_dir, [specs(ip).tag sp.tag_suffix '.pdf']);
+            exportgraphics(fig, outfile, 'ContentType', 'vector');
+            close(fig);
+            fprintf('Wrote %s\n', outfile);
+        end
     end
 
-    % Convenience side-by-side PNG.
+    % Convenience 2x4 PNG: one row per system, metrics aligned column-wise.
     fig = figure('Visible', 'off', 'Units', 'inches', ...
-                 'Position', [0 0 21 3.6], 'Color', 'w');
-    tl = tiledlayout(fig, 1, 4, 'Padding', 'compact', 'TileSpacing', 'compact');
-    for ip = 1:numel(specs)
-        draw_inverse_panel(nexttile(tl), rows, specs(ip), pcg_iters_exact);
+                 'Position', [0 0 21 7.2], 'Color', 'w');
+    tl = tiledlayout(fig, numel(sysPlot), numel(specs), ...
+                     'Padding', 'compact', 'TileSpacing', 'compact');
+    for is = 1:numel(sysPlot)
+        sp     = sysPlot(is);
+        rows_s = rows(strcmp({rows.system}, sp.name));
+        for ip = 1:numel(specs)
+            draw_inverse_panel(nexttile(tl), rows_s, specs(ip), ...
+                               sp.pcg_iters_exact, sp.zlabel);
+        end
     end
     title(tl, ['Capture vs operator applications q: exact-inverse iteration ', ...
-               'vs polynomial filters'], ...
+               'vs polynomial filters (row 1: Tsym, row 2: original A)'], ...
           'FontWeight', 'bold', 'FontSize', 12);
-    outfile = fullfile(out_dir, 'aggregate_1x4.png');
+    outfile = fullfile(out_dir, 'aggregate_2x4.png');
     exportgraphics(fig, outfile, 'Resolution', 200);
     close(fig);
     fprintf('Wrote %s\n', outfile);
 end
 
-function draw_inverse_panel(ax, rows, spec, pcg_iters_exact)
+function draw_inverse_panel(ax, rows, spec, pcg_iters_exact, zlabel_str)
 %DRAW_INVERSE_PANEL  One (metric vs iteration) panel overlaying the series.
-%   pcg_iters_exact (optional) draws the exact-deflation floor in the
-%   pcg_iters panel.
+%   rows must already be filtered to a single system.  pcg_iters_exact draws
+%   that system's exact-deflation floor in the pcg_iters panel; zlabel_str
+%   names the system's inverse operator in the title.
     if nargin < 4, pcg_iters_exact = NaN; end
+    if nargin < 5, zlabel_str = 'Tsym^{-1}'; end
     series = series_spec();
     hold(ax, 'on');
     legs    = cell(1, numel(series));
@@ -670,7 +783,7 @@ function draw_inverse_panel(ax, rows, spec, pcg_iters_exact)
     xlabel(ax, 'number of subspace iterations q', ...
            'FontSize', 10, 'FontWeight', 'bold');
     ylabel(ax, spec.ylabel, 'FontSize', 10, 'FontWeight', 'bold');
-    title(ax, sprintf('%s  (Z = Tsym^{-1})', spec.title), ...
+    title(ax, sprintf('%s  (Z = %s)', spec.title, zlabel_str), ...
           'FontSize', 11, 'FontWeight', 'bold', 'Interpreter', 'tex');
 
     lgd = legend(ax, handles(keep), legs(keep), ...
@@ -681,32 +794,37 @@ function draw_inverse_panel(ax, rows, spec, pcg_iters_exact)
 end
 
 function series = series_spec()
-%SERIES_SPEC  The 8 (block, method) series with consistent visuals.
-%   Color encodes the starting block; line-style + marker encode the method.
-%   Polynomial filters (chebyshev/power_iz) only exist for the two width-m blocks.
+%SERIES_SPEC  The 9 (block, method) series with consistent visuals.
+%   Shared by both system rows (kind names are system-agnostic; the panel
+%   title carries the system).  Color encodes the starting block; line-style +
+%   marker encode the method.  Polynomial filters (chebyshev/power_iz) only
+%   exist for the two width-m blocks.
     block_color = struct( ...
-        'gaussian',        [0.00 0.00 0.00], ...
-        'sketched_tent_T', [0.85 0.33 0.10], ...
-        'tent_T',          [0.20 0.70 0.30], ...
-        'gaussian_tent',   [0.35 0.35 0.75]);
+        'gaussian',      [0.00 0.00 0.00], ...
+        'sketched_tent', [0.85 0.33 0.10], ...
+        'tent',          [0.20 0.70 0.30], ...
+        'gaussian_tent', [0.35 0.35 0.75]);
     block_short = struct( ...
-        'gaussian',        'gaussian(m)', ...
-        'sketched_tent_T', 'sk_tent_T(m)', ...
-        'tent_T',          'tent_T(nc)', ...
-        'gaussian_tent',   'gauss_tent(nc)');
-    method_style = struct('inverse', '-',  'chebyshev', '--', 'power_iz', ':');
-    method_mark  = struct('inverse', 'o',  'chebyshev', 's',  'power_iz', '^');
+        'gaussian',      'gaussian(m)', ...
+        'sketched_tent', 'sk_tent(m)', ...
+        'tent',          'tent(nc)', ...
+        'gaussian_tent', 'gauss_tent(nc)');
+    method_style = struct('inverse', '-',  'inverse_reorth', '-.', ...
+                          'chebyshev', '--', 'power_iz', ':');
+    method_mark  = struct('inverse', 'o',  'inverse_reorth', 'd', ...
+                          'chebyshev', 's',  'power_iz', '^');
 
     % (block, method) pairs in legend order.
     combos = { ...
-        'gaussian',        'inverse'; ...
-        'gaussian',        'chebyshev'; ...
-        'gaussian',        'power_iz'; ...
-        'sketched_tent_T', 'inverse'; ...
-        'sketched_tent_T', 'chebyshev'; ...
-        'sketched_tent_T', 'power_iz'; ...
-        'tent_T',          'inverse'; ...
-        'gaussian_tent',   'inverse'};
+        'gaussian',      'inverse'; ...
+        'gaussian',      'inverse_reorth'; ...
+        'gaussian',      'chebyshev'; ...
+        'gaussian',      'power_iz'; ...
+        'sketched_tent', 'inverse'; ...
+        'sketched_tent', 'chebyshev'; ...
+        'sketched_tent', 'power_iz'; ...
+        'tent',          'inverse'; ...
+        'gaussian_tent', 'inverse'};
 
     nS = size(combos, 1);
     series = repmat(struct('P0_kind', '', 'method', '', 'label', '', ...

@@ -11,3 +11,5 @@ symindefinite/linear_solves/*.mat
 # AMG subspace-capture ablation outputs (regenerated on run)
 amg_subspace/output/
 amg_subspace/output_smoke/
+amg_subspace/output_tsym/
+amg_subspace/output_tsym_smoke/

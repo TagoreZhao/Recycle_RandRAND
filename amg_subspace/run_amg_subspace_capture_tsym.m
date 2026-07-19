@@ -1,114 +1,47 @@
-%RUN_AMG_SUBSPACE_CAPTURE  AMG-as-approximate-inverse subspace-capture ablation.
+%RUN_AMG_SUBSPACE_CAPTURE_TSYM  AMG subspace-capture ablation on Tsym.
 %
-% Studies how well a 2-level smoothed-aggregation AMG V-cycle M ~= A^{-1}
-% captures the SMALLEST eigenvector space of the sparse SPD FEM snapshot A
-% when used as the operator of Gaussian-sketched subspace iteration:
-%     V0 = randn(n, m);   V <- orth(M(V))   (q times).
-% Motivation: build a deflation basis from preconditioner applies only
-% (roughly matrix-free after the AMG setup).
+% Same ablation as run_amg_subspace_capture.m, but the TARGET SYSTEM is the
+% ichol split-preconditioned operator (as in subspace_capture/):
+%     Tsym = L^{-1} A L^{-T},   L = ichol(A,'nofill'),
+% i.e. the system the two-level deflated split scheme actually runs on.
+% Question: do the A-targeted ablation conclusions (SA vs SJLT projector gap,
+% smoothing / inner-solve sensitivity, coarse-size sweep) survive when the
+% object of study is the preconditioned system instead of A itself?
 %
-% Fixed AMG structure (least-cost by design):
-%   * maxLevels = 2 : fine level + ONE coarse level, nothing deeper.
-%   * fine smoother = ichol(A,'nofill') (the factory applies it on level 1;
-%     with 2 levels no Jacobi-smoothed intermediate levels exist).
+% Operator construction (the only substantive change vs the A-targeted run):
+%   * The AMG hierarchy is built on A exactly as before (make_amg_prec_ablate
+%     with the ichol fine smoother); M ~= A^{-1}.
+%   * Its conjugation  Zhat = L^T M L  ~=  L^T A^{-1} L = Tsym^{-1}  is the
+%     matching approximate inverse of Tsym, so the subspace iteration becomes
+%         V0 = randn(n, m);   V <- orth(Lt * M(L * V))   (q times).
+%     Zhat inherits M's symmetry caveat: (L^T M L)' = L^T M' L, so Zhat is
+%     symmetric iff preSmooth == postSmooth.
+%   * Reference config 'exact_inverse' uses the exact Tsym^{-1} = L^T A^{-1} L.
+%   * Ground truth = smallest k eigenvectors of Tsym (NOT of A); kappa is the
+%     two-level deflated condition number of Tsym with tau = lam_{k+1}(Tsym).
+%   * The wrap adds two sparse matvecs with L per apply; the work-unit proxy
+%     is adjusted by 2*nnz(L)/nnz(A) accordingly (still 1 WU = one fine
+%     matvec with A).
 %
-% Four ablation sections (config naming:  <proj>_pre<i>_post<j>_<coarse>[_nc<size>],
-% proj in {sa, sjlt1, sjlt4} where the digit is s = nnz per fine row):
-%   A_smoothing   : (preSmooth, postSmooth) counts; SA projector, exact coarse.
-%   B_inner_solve : coarse "inner" solve at pre=post=1: exact chol vs nu
-%                   damped-Jacobi sweeps vs loose-tol PCG (+ two cross configs).
-%   C_projector   : SA tentative prolongator vs SJLT sketch at MATCHED coarse
-%                   size nc.  Both are sparse projections; SA has 1 nnz/row
-%                   placed by connectivity, SJLT has s random +-1/sqrt(s)
-%                   entries/row (s=1 is CountSketch = random aggregation).
-%   D_coarse_size : SJLT (s=4) coarse-size sweep nc in {100..3200} -- the size
-%                   of the coarse solve is SJLT's free parameter, unlike SA
-%                   where nc is emergent (~n/5 here).
+% Configs, metrics, CSV schemas, plot folders and file names are IDENTICAL to
+% run_amg_subspace_capture.m so output_tsym/ is diffable side-by-side against
+% output/.  See that script's header for the ablation rationale (sections
+% A_smoothing / B_inner_solve / C_projector / D_coarse_size, references
+% sa_pre1_post1_chol + exact_inverse + exact_inverse_plain drawn in every
+% section; the _plain twin iterates the exact inverse WITHOUT per-step
+% re-orthonormalization and demonstrates the roundoff rank collapse that
+% truncates subspace_capture/run_inverse_subspace_iter.m past q ~ 4).
 %
-% Why sections C/D are interesting (two-level AMG theory):
-%   * Two-level convergence needs the WEAK APPROXIMATION PROPERTY
-%     (Ruge-Stuben; Vanek-Mandel-Brezina; Falgout-Vassilevski): range(P) must
-%     approximate every algebraically smooth error with energy accuracy
-%     ~ lambda/lambda_max, i.e. contain the near-kernel.  The SA tentative
-%     prolongator is BUILT for this (piecewise-constant over connectivity
-%     aggregates reproduces the Laplacian near-kernel).  Exact coarse-grid
-%     correction is I - pi_A(range(P)): it removes only the error component
-%     inside range(P), and a fixed smooth mode has expected captured energy
-%     ~ nc/n in a RANDOM nc-dim subspace -- so theory predicts SJLT plateaus
-%     far above SA at matched nc.  The SJLT embedding guarantee (nc ~ k
-%     polylog) is about Omega'x preserving norms, NOT about range(Omega)
-%     aligning with a chosen subspace; randomized eigensolvers get away with
-%     nc ~ k only because they sketch THROUGH A^{-1} applies (which is what
-%     the outer subspace iteration does), an alignment the coarse space
-%     inside M never receives.
-%   * Limits anchoring section D: nc -> n gives CGC -> Omega(Omega'A
-%     Omega)^{-1}Omega' = A^{-1} exactly (unit-tested), i.e. exact inverse
-%     iteration; nc -> 0 leaves only the ichol smoother, whose dominant
-%     invariant subspace is NOT the small-lambda space.  The sweep reads off
-%     the minimal nc with acceptable capture/kappa (e.g. kappa_ratio <~ 2 at
-%     q = 20).
-%   * Cost counterpoint: SJLT is trivially cheap to CONSTRUCT (no graph
-%     traversal / strength-of-connection), but Omega'*A*Omega loses locality
-%     and fills in, so its coarse chol is denser than SA's at the same nc --
-%     setup_time / coarseNnz / work units in the CSVs test the "easier to
-%     construct" claim end-to-end.
-%
-% Caveats (also encoded in make_amg_prec_ablate):
-%   * preSmooth ~= postSmooth makes M NONSYMMETRIC.  Subspace iteration still
-%     converges to the dominant invariant subspace of M, and the directed
-%     principal-angle metric is basis-invariant, so the comparison stands --
-%     but such an M is not a valid pcg preconditioner.
-%   * preSmooth = postSmooth = 0 is pure coarse-grid correction with
-%     rank(M) = coarseN; the captured space then lives inside an
-%     coarseN-dimensional range (warned about if coarseN < m).
-%
-% The capture-error-vs-q curves plateau at the angle between M's dominant
-% invariant subspace and the true smallest-k eigenspace of A; that plateau,
-% per AMG configuration, is the quantity of interest.
-%
-% Metrics per (config, q):
-%   * directed principal angles (subspace_capture_directed): eigspace_err_2,
-%     eigspace_err_fro, capture fractions at sin(theta) < 1% / 0.1%;
-%   * two-level deflated condition number kappa of A deflated with the
-%     captured basis (deflated_cond_two_level with Tfun = A, tau =
-%     lam_{k+1}(A)), reported as kappa / kappa_exact where kappa_exact uses
-%     the true eigenvectors (analytically lam_max(A)/lam_{k+1});
-%   * cost: AMG setup time, cumulative measured block-apply time, and a
-%     flop-proxy work-unit count (1 WU = one fine matvec; see
-%     make_amg_prec_ablate).  orth() time is tracked separately -- it is
-%     identical across configs and not an AMG property.
-%
-% Outputs (amg_subspace/output/ or output_smoke/):
+% Outputs (amg_subspace/output_tsym/ or output_tsym_smoke/):
 %   results.mat / results.csv        one row per (config, q), all sections
 %   setup_apply_cost.csv             one row per config
-%   <section>/                       one folder per ablation section
-%     eigspace_err2_vs_q.pdf           ||(I-P)Q_true||_2 (log y) vs q
-%     angle_capture_fraction_vs_q.pdf  fraction with sin(theta) < 1% vs q
-%     kappa_ratio_vs_q.pdf             kappa/kappa_exact (log y) vs q
-%     aggregate_1x3.png                the three panels side by side
-% with section in {A_smoothing, B_inner_solve, C_projector, D_coarse_size};
-% two reference series are drawn in EVERY section so the four ablations are
-% cross-comparable:
-%   sa_pre1_post1_chol (black solid)  -- the AMG baseline;
-%   exact_inverse      (gray dotted)  -- subspace iteration with the EXACT
-%     A^{-1} (chol decomposition), the ideal-operator floor: it shows the
-%     best capture any approximate inverse could reach at the same q, so the
-%     gap AMG-curve -> exact-inverse curve is the price of approximating
-%     A^{-1} by one V-cycle;
-%   exact_inverse_plain (light gray dotted) -- the SAME exact inverse but
-%     WITHOUT per-step re-orthonormalization (plain iteration, as in
-%     subspace_capture/run_inverse_subspace_iter.m): demonstrates the
-%     roundoff rank collapse of an un-reorthogonalized block (r_comp/r_defl
-%     shrink, capture stalls), which is why those curves truncate past
-%     q ~ 4 while the orth'd twin keeps converging.
-% (Cost data -- setup time, cumulative apply/orth time, work units -- is
-% recorded in the CSVs, not plotted.  The exact-inverse rows carry NaN
-% setup/work-unit proxies: its dense-factor cost is not comparable to the
-% V-cycle work model, only its measured apply time is meaningful.)
+%   <section>/                       eigspace_err2_vs_q.pdf,
+%                                    angle_capture_fraction_vs_q.pdf,
+%                                    kappa_ratio_vs_q.pdf, aggregate_1x3.png
 %
 % Usage:
 %   cd amg_subspace
-%   run_amg_subspace_capture
+%   run_amg_subspace_capture_tsym
 
 thisFileDir = fileparts(mfilename('fullpath'));
 repoRoot    = fileparts(thisFileDir);
@@ -118,7 +51,8 @@ addpath(thisFileDir);                              % local AMG factory
 
 %% --- Configuration ---------------------------------------------------------
 % true = fast end-to-end check (small mesh, 4 configs).  Pre-set `smoke` in
-% the workspace (e.g. `smoke = true; run_amg_subspace_capture`) to override.
+% the workspace (e.g. `smoke = true; run_amg_subspace_capture_tsym`) to
+% override.
 if ~exist('smoke', 'var'), smoke = false; end
 
 if smoke
@@ -126,13 +60,13 @@ if smoke
     k         = 40;
     iters     = [0 1 2 4];
     minCoarse = 100;
-    outDir    = fullfile(thisFileDir, 'output_smoke');
+    outDir    = fullfile(thisFileDir, 'output_tsym_smoke');
 else
     h0        = 0.05;
     k         = 200;
     iters     = [0 1 2 3 4 5 6 8 10 12 16 20];
     minCoarse = 800;
-    outDir    = fullfile(thisFileDir, 'output');
+    outDir    = fullfile(thisFileDir, 'output_tsym');
 end
 m        = 2 * k;
 cacheDir = fullfile(outDir, 'cache');
@@ -162,35 +96,37 @@ Lt = L';
 fprintf('A: %d x %d, nnz=%d, sym=%d   nnz(L)=%d\n', ...
         size(A,1), size(A,2), nnz(A), issymmetric(A), nnz(L));
 
-%% --- Ground truth: smallest k eigenvectors of A ----------------------------
-dA = decomposition(A, 'chol');
-[V_true, lam_cut] = load_or_compute_eigs_A(cacheDir, A, dA, k, h0);
-fprintf('V_true (smallest %d eigvecs of A): %d x %d  (lam_cut=%.4e)\n', ...
+%% --- Target operator Tsym = L^{-1} A L^{-T} --------------------------------
+dA      = decomposition(A, 'chol');
+Tfun    = @(X) L \ (A * (Lt \ X));        % forward Tsym
+Tinvfun = @(X) Lt * (dA \ (L * X));       % exact Tsym^{-1} = L^T A^{-1} L
+
+%% --- Ground truth: smallest k eigenvectors of Tsym --------------------------
+[V_true, lam_cut] = load_or_compute_eigs_Tsym(cacheDir, Tinvfun, n, k, h0);
+fprintf('V_true (smallest %d eigvecs of Tsym): %d x %d  (lam_cut=%.4e)\n', ...
         k, size(V_true,1), size(V_true,2), lam_cut);
 
 %% --- kappa_exact: best-achievable deflated condition number ----------------
-Afun    = @(x) A * x;
-Ainvfun = @(x) dA \ x;
 condOpts    = struct('eigs_tol', 1e-8, 'eigs_maxit', 5000, 'W_is_orth', true);
 % Raw-block variant (no W_is_orth): the un-reorthogonalized 'plain' config
 % passes a non-orthonormal V, whose internal pivoted QR records the rank.
 condOptsRaw = struct('eigs_tol', 1e-8, 'eigs_maxit', 5000);
-exactCond = deflated_cond_two_level(V_true, Afun, Ainvfun, lam_cut, n, condOpts);
+exactCond = deflated_cond_two_level(V_true, Tfun, Tinvfun, lam_cut, n, condOpts);
 if ~exactCond.ok
-    error('run_amg_subspace_capture:kappaExactFailed', ...
+    error('run_amg_subspace_capture_tsym:kappaExactFailed', ...
           'kappa_exact computation failed: %s', exactCond.err);
 end
 kappa_exact = exactCond.kappa;
-lam_max_A   = exactCond.lam_max;
-fprintf('kappa_exact = %.6e  (analytic lam_max_A/lam_cut = %.6e)\n', ...
-        kappa_exact, lam_max_A / lam_cut);
+lam_max_T   = exactCond.lam_max;
+fprintf('kappa_exact = %.6e  (analytic lam_max_T/lam_cut = %.6e)\n', ...
+        kappa_exact, lam_max_T / lam_cut);
 
 %% --- Shared Gaussian starting block ---------------------------------------
 rng(seed);
 V0 = randn(n, m);
 
 %% --- Sweep over AMG configurations ----------------------------------------
-ops = struct('Afun', Afun, 'Ainvfun', Ainvfun, 'lam_cut', lam_cut, ...
+ops = struct('Afun', Tfun, 'Ainvfun', Tinvfun, 'lam_cut', lam_cut, ...
              'n', n, 'm', m, 'kappa_exact', kappa_exact, ...
              'condOpts', condOpts, 'condOptsRaw', condOptsRaw, ...
              'iters', iters);
@@ -212,6 +148,9 @@ for ic = 1:numel(configs)
     end
 end
 
+% Extra WU per Zhat apply: the two sparse matvecs with L in Lt * M(L * X).
+wrapWU = 2 * nnz(L) / nnz(A);
+
 rows = [];
 for ic = 1:numel(configs)
     cfg = configs(ic);
@@ -220,21 +159,20 @@ for ic = 1:numel(configs)
             cfg.preSmooth, cfg.postSmooth, cfg.coarseSolve);
 
     if strcmp(cfg.projector, 'exact')
-        % Ideal-operator reference: exact inverse iteration via the chol
-        % decomposition already built for the ground-truth eigs.  The AMG
-        % cost model does not apply (NaN work proxies); measured apply time
-        % is still recorded by the sweep.
-        Mfun  = @(X) dA \ X;
+        % Ideal-operator reference: exact Tsym^{-1} = L^T A^{-1} L via the
+        % chol decomposition.  The AMG cost model does not apply (NaN work
+        % proxies); measured apply time is still recorded by the sweep.
+        Mfun  = Tinvfun;
         ainfo = struct('projector', 'exact', 'sjltNnzPerCol', NaN, ...
                        'levels', struct('n', n, 'nnzA', nnz(A), 'nnzP', 0), ...
                        'nLevels', 1, 'coarseN', NaN, 'coarseNnz', NaN, ...
                        'coarseType', 'exact', 'setupTime', NaN, ...
                        'workPerApply', NaN, 'workUnits', NaN);
-        fprintf('  exact inverse A^{-1} (chol decomposition reference)\n');
+        fprintf('  exact inverse Tsym^{-1} = L''A^{-1}L (chol reference)\n');
     else
         % Reseed per config: sjlt draws become reproducible AND distinct.
         rng(seed + ic);
-        [Mfun, ainfo] = make_amg_prec_ablate(A, ...
+        [Mamg, ainfo] = make_amg_prec_ablate(A, ...
             'maxLevels', 2, 'minCoarseSize', minCoarse, ...
             'theta', theta, 'maxAggSize', maxAggSize, ...
             'omegaInterp', 0, 'omegaSmooth', omegaSmooth, ...
@@ -247,12 +185,16 @@ for ic = 1:numel(configs)
             'sjltNc', cfg.sjltNc, 'sjltNnzPerCol', cfg.sjltNnzPerCol, ...
             'fineSmootherL', L, 'fineSmootherLt', Lt);
 
+        % Conjugated V-cycle: Zhat = L^T M L ~= Tsym^{-1}.
+        Mfun = @(X) Lt * (Mamg(L * X));
+        ainfo.workUnits = ainfo.workUnits + wrapWU;
+
         fprintf('  levels %s  coarse=%s  setup=%.2fs  WU/apply=%.2f\n', ...
                 mat2str([ainfo.levels.n]), ainfo.coarseType, ...
                 ainfo.setupTime, ainfo.workUnits);
     end
     if cfg.preSmooth == 0 && cfg.postSmooth == 0 && ainfo.coarseN < m
-        warning('run_amg_subspace_capture:rankLimited', ...
+        warning('run_amg_subspace_capture_tsym:rankLimited', ...
                 ['config %s: pure coarse-grid correction with coarseN=%d < ', ...
                  'm=%d -- captured subspace is rank-limited.'], ...
                 cfg.name, ainfo.coarseN, m);
@@ -263,11 +205,11 @@ for ic = 1:numel(configs)
 end
 
 %% --- Save ------------------------------------------------------------------
-meta = struct('n', n, 'k', k, 'm', m, 'iters', iters, ...
+meta = struct('target', 'Tsym', 'n', n, 'k', k, 'm', m, 'iters', iters, ...
               'h0', h0, 'contrast', contrast, 't_snap', t_snap, 'dt', dt, ...
               'seed', seed, 'theta', theta, 'maxAggSize', maxAggSize, ...
               'omegaSmooth', omegaSmooth, 'minCoarseSize', minCoarse, ...
-              'maxLevels', 2, 'lam_cut', lam_cut, 'lam_max_A', lam_max_A, ...
+              'maxLevels', 2, 'lam_cut', lam_cut, 'lam_max_Tsym', lam_max_T, ...
               'kappa_exact', kappa_exact, 'smoke', smoke, ...
               'nc_sa', nc_sa, 'config_names', {{configs.name}});
 save(fullfile(outDir, 'results.mat'), 'rows', 'meta', '-v7');
@@ -286,14 +228,8 @@ fprintf('\nDone.\n');
 %% =========================================================================
 function configs = make_configs(smoke)
 %MAKE_CONFIGS  The ablation grid: 19 configs, all maxLevels = 2.
-%   Naming:  <proj>_pre<i>_post<j>_<coarse>[_nc<size>]
-%     proj   : sa | sjlt1 | sjlt4    (digit = s, nnz per fine row)
-%     nc     : zero-padded coarse size for sjlt sweep configs; 'ncmatch' means
-%              "match the SA baseline's realized nc" (resolved at runtime).
-%   section : which ablation the config belongs to / which plot folder it is
-%             drawn in.  'baseline' = sa_pre1_post1_chol, drawn (black, solid)
-%             in EVERY section.
-%   Visuals: solid = SA, dashed = SJLT, dash-dot = cross configs.
+%   Identical to run_amg_subspace_capture.m (kept in sync by hand so the
+%   Tsym-targeted results are config-for-config comparable).
     C = struct('name', {}, 'preSmooth', {}, 'postSmooth', {}, ...
                'coarseSolve', {}, 'coarseJacobiSweeps', {}, ...
                'coarsePcgTol', {}, 'coarsePcgMaxit', {}, ...
@@ -308,8 +244,8 @@ function configs = make_configs(smoke)
                    'section', sect, 'label', name, 'color', col, 'style', st)];
 
     % --- references (drawn in every section) -------------------------------
-    % exact_inverse sits outside the <proj>_... naming scheme: it is not an
-    % AMG config but the ideal-operator floor V <- orth(A^{-1} V).
+    % exact_inverse here is the exact Tsym^{-1} = L^T A^{-1} L, the
+    % ideal-operator floor V <- orth(Tsym^{-1} V).
     C = add(C, 'sa_pre1_post1_chol', 1, 1, 'chol', NaN, NaN, NaN, ...
             'sa', NaN, NaN, 'baseline', [0.00 0.00 0.00], '-');
     C = add(C, 'exact_inverse', NaN, NaN, 'exact', NaN, NaN, NaN, ...
@@ -378,12 +314,12 @@ end
 
 function rows = run_one_config(cfg, Mfun, ainfo, V0, V_true, ops)
 %RUN_ONE_CONFIG  One incremental q-sweep: V <- orth(Mfun(V)), metrics at each
-%   recorded q.  cfg.reorth = true re-orthonormalizes EVERY step: M's
-%   spectrum decays like 1/lambda(A), so an unorthogonalized block loses the
-%   trailing directions to roundoff well before q = 20.  cfg.reorth = false
-%   skips the in-loop orth (plain iteration, as in
-%   run_inverse_subspace_iter.m); the metrics then orthonormalize a
-%   rank-truncating copy, so r_comp/r_defl record the collapse.
+%   recorded q.  cfg.reorth = true re-orthonormalizes EVERY step: Zhat's
+%   spectrum decays like 1/lambda(Tsym), so an unorthogonalized block loses
+%   the trailing directions to roundoff well before q = 20.  cfg.reorth =
+%   false skips the in-loop orth (plain iteration); the metrics then
+%   orthonormalize a rank-truncating copy, so r_comp/r_defl record the
+%   collapse.
     iters   = ops.iters;
     V       = orth(V0);
     q_prev  = 0;
@@ -420,7 +356,7 @@ function rows = run_one_config(cfg, Mfun, ainfo, V0, V_true, ops)
             row.ok     = true;
         catch ME
             row.err = regexprep(ME.message, '\n.*', '');
-            warning('run_amg_subspace_capture:captureFailed', ...
+            warning('run_amg_subspace_capture_tsym:captureFailed', ...
                     '%s q=%d capture failed: %s', cfg.name, q, row.err);
         end
 
@@ -497,12 +433,12 @@ function L = ichol_with_fallback(A)
     end
 end
 
-function [V_true, lam_cut] = load_or_compute_eigs_A(cacheDir, A, dA, k, h0)
-%LOAD_OR_COMPUTE_EIGS_A  Smallest k+1 eigenpairs of A itself (cached).
-%   Cache key includes h0 and k so smoke and full runs never collide.
-%   NOTE: the old subspace_capture caches hold eigenpairs of Tsym, not A --
-%   they cannot be reused here.
-    cachePath = fullfile(cacheDir, sprintf('eigsA_h%g_k%d.mat', h0, k));
+function [V_true, lam_cut] = load_or_compute_eigs_Tsym(cacheDir, Tinvfun, n, k, h0)
+%LOAD_OR_COMPUTE_EIGS_TSYM  Smallest k+1 eigenpairs of Tsym (cached).
+%   Cache key includes h0 and k so smoke and full runs never collide.  The
+%   subspace_capture/output/cache/eigsTsym_k*.mat files are NOT h0-keyed and
+%   are not reused here.
+    cachePath = fullfile(cacheDir, sprintf('eigsTsym_h%g_k%d.mat', h0, k));
     if isfile(cachePath)
         S = load(cachePath, 'V', 'D');
         V_true  = S.V(:, 1:k);
@@ -510,13 +446,12 @@ function [V_true, lam_cut] = load_or_compute_eigs_A(cacheDir, A, dA, k, h0)
         fprintf('Loaded cached %s\n', cachePath);
         return;
     end
-    fprintf('Computing smallest %d eigenpairs of A (one-time)...\n', k + 1);
-    n  = size(A, 1);
+    fprintf('Computing smallest %d eigenpairs of Tsym (one-time)...\n', k + 1);
     t0 = tic;
     % Name-value options, NOT the legacy opts struct: eigs silently ignores
     % struct fields with these capitalized names.  With a function handle and
-    % 'smallestabs', eigs expects the handle to apply A^{-1} x.
-    [Vraw, Dmat] = eigs(@(x) dA \ x, n, k + 1, 'smallestabs', ...
+    % 'smallestabs', eigs expects the handle to apply Tsym^{-1} x.
+    [Vraw, Dmat] = eigs(Tinvfun, n, k + 1, 'smallestabs', ...
                         'Tolerance', 1e-10, 'MaxIterations', 5000, ...
                         'IsFunctionSymmetric', true);
     [D, idx] = sort(real(diag(Dmat)), 'ascend');
@@ -593,10 +528,13 @@ function make_amg_capture_plots(rows, configs, out_dir)
 %   rows (smoke subsets) are skipped.
     sections = {'A_smoothing', 'B_inner_solve', 'C_projector', 'D_coarse_size'};
     secTitles = { ...
-        'A: pre/post smoothing sweeps (SA projector, exact coarse solve)', ...
-        'B: coarse inner solve (SA projector, at/around pre=post=1)', ...
-        'C: projector -- SA aggregation vs SJLT sketch at matched nc', ...
-        'D: SJLT (s=4) coarse-size sweep'};
+        ['A: pre/post smoothing sweeps (SA projector, exact coarse solve)', ...
+         '  --  target = Tsym'], ...
+        ['B: coarse inner solve (SA projector, at/around pre=post=1)', ...
+         '  --  target = Tsym'], ...
+        ['C: projector -- SA aggregation vs SJLT sketch at matched nc', ...
+         '  --  target = Tsym'], ...
+        'D: SJLT (s=4) coarse-size sweep  --  target = Tsym'};
 
     ranConfigs = unique({rows.config});
     for is = 1:numel(sections)
@@ -629,8 +567,8 @@ function make_section_plots(rows, configs, out_dir, sec_title)
         'ylabel', {'||(I-P)Q_{true}||_2', ...
                    'captured directions (sin\theta < 1%)', ...
                    '\kappa_{approx} / \kappa_{exact}'}, ...
-        'title',  {'eigenspace error', 'angle capture fraction', ...
-                   'deflated condition-number ratio'}, ...
+        'title',  {'eigenspace error (Tsym)', 'angle capture fraction (Tsym)', ...
+                   'deflated condition-number ratio (Tsym)'}, ...
         'legloc', {'northeast', 'southeast', 'northeast'}, ...
         'tag',    {'eigspace_err2_vs_q', 'angle_capture_fraction_vs_q', ...
                    'kappa_ratio_vs_q'});
