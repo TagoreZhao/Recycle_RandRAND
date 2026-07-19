@@ -1,4 +1,4 @@
-% RUN_INVERSE_SUBSPACE_ITER  Exact-inverse subspace-iteration capture study.
+q% RUN_INVERSE_SUBSPACE_ITER  Exact-inverse subspace-iteration capture study.
 %
 % Studies how PLAIN subspace iteration driven by the EXACT INVERSE of the
 % preconditioned operator captures the smallest eigenvectors of that operator,
@@ -40,7 +40,16 @@
 %                                     via the local deflated_cond_two_level
 %                                     (kappa_exact = deflation with V_true;
 %                                     analytically lam_max/lam_cut)
-%   aggregate_1x3.png               — all three panels side by side (convenience)
+%   pcg_iters_inv.pdf               — downstream PCG iterations to converge vs
+%                                     iteration q.  PCG solves the ORIGINAL
+%                                     system A x = b, preconditioned by the
+%                                     split two-level operator B = L^-T P L^-1
+%                                     (5th pcg arg); the deflation operator P is
+%                                     BUILT on Ahat = Tsym from the captured
+%                                     basis Q (src.precond.deflation_P_apply).
+%                                     The exact-deflation (V_true) iteration
+%                                     count is drawn as a dashed floor.
+%   aggregate_1x4.png               — all four panels side by side (convenience)
 %
 % Ground truth (smallest k eigenvectors of Tsym) is read from the cache that
 % run_subspace_capture.m already populated (output/cache/eigsTsym_k500.mat); no
@@ -78,6 +87,15 @@ maxAggSize   = 16;
 seed         = 1;
 drop_rel_tol = 1e-8;
 
+% Downstream PCG (split two-level scheme) configuration.  The KL-noise RHS
+% and solver tolerances mirror run_krylov_capture.m so the iteration counts
+% are directly comparable to the sibling study.
+Kmodes    = 50;                  % # KL cosine modes in the solver RHS
+sigma     = 1;                   % RHS scale (irrelevant to the Krylov subspace)
+bbox      = [-1 1 -1 1];         % unit-sphere x,y extent for the cosine modes
+pcg_tol   = 1e-8;                % PCG convergence tolerance
+pcg_maxit = 400;                 % PCG iteration cap
+
 P0_kinds = {'gaussian', 'sketched_tent_T', 'tent_T', 'gaussian_tent'};
 
 % Methods sharing the common x-axis q (= operator applications):
@@ -110,6 +128,16 @@ Zfun_Tsym = @(X) L \ (A * (Lt \ X));
 lam_max_T = load_or_compute_lam_max(cacheDir, 'Tsym', Zfun_Tsym, n);
 fprintf('lam_max(Tsym) = %.4e\n', lam_max_T);
 
+% KL-noise RHS for the downstream split two-level PCG solve (mirrors
+% run_krylov_capture.m:101-107).  (P)CG normalizes the RHS internally, so
+% sigma does not affect the iteration count; the seed fixes the realization.
+kvec  = generate_kvec(Kmodes);
+Phi   = src.forcing.eval_cosine_modes(msh.p, kvec, bbox);   % numIN x Kmodes
+rng(seed);
+z     = randn(Kmodes, 1);
+b_pcg = sigma * sqrt(dt) * (msh.D_II * (Phi * z));           % exact solver rhsI
+fprintf('PCG RHS b: Kmodes=%d, seed=%d, ||b||=%.4e\n', Kmodes, seed, norm(b_pcg));
+
 % Condition number of the EXACTLY deflated two-level system (W = V_true_T),
 % computed once; every sweep point is reported relative to it.
 condOpts  = struct('eigs_tol', 1e-8, 'eigs_maxit', 5000);   % per-point (raw W)
@@ -123,6 +151,13 @@ end
 kappa_exact = exactCond.kappa;
 fprintf('kappa_exact = %.6e  (analytic lam_max_T/lam_cut = %.6e)\n', ...
         kappa_exact, lam_max_T / lam_cut);
+
+% Downstream PCG iteration count of the EXACTLY deflated split two-level
+% system (W = V_true_T): the best-achievable floor, drawn as a reference line
+% in the pcg_iters panel (analogous to kappa_exact for kappa_ratio).
+pcg_iters_exact = split_two_level_pcg_iters(V_true_T, A, L, Lt, Zfun_Tsym, ...
+                                            lam_cut, b_pcg, pcg_tol, pcg_maxit);
+fprintf('pcg_iters_exact = %g  (split two-level, W = V_true_T)\n', pcg_iters_exact);
 
 %% --- Tentative prolongator from the preconditioned operator T --------------
 T_sparse = build_Tsym_sparse(L, Lt, A, drop_rel_tol);
@@ -148,7 +183,9 @@ end
 % Operator handles + spectral bounds shared by the per-q runs.
 ops = struct('invApply', invApply, 'Zfun_Tsym', Zfun_Tsym, ...
              'lam_cut', lam_cut, 'lam_max', lam_max_T, 'n', n, ...
-             'kappa_exact', kappa_exact, 'condOpts', condOpts);
+             'kappa_exact', kappa_exact, 'condOpts', condOpts, ...
+             'A', A, 'L', L, 'Lt', Lt, ...
+             'b_pcg', b_pcg, 'pcg_tol', pcg_tol, 'pcg_maxit', pcg_maxit);
 
 rows = [];
 for ik = 1:numel(P0_kinds)
@@ -174,9 +211,10 @@ for ik = 1:numel(P0_kinds)
             info.iter     = q;
             rows = [rows; info];                                      %#ok<AGROW>
             fprintf(['  %-16s %-10s q=%2d : err_2=%.3e  angle_capture=%.3f', ...
-                     '  kappa_ratio=%.3e\n'], ...
+                     '  kappa_ratio=%.3e  pcg_iters=%g\n'], ...
                     kind, method, q, info.eigspace_err_2, ...
-                    info.angle_capture_frac_1pct, info.kappa_ratio);
+                    info.angle_capture_frac_1pct, info.kappa_ratio, ...
+                    info.pcg_iters);
         end
     end
 end
@@ -186,14 +224,17 @@ meta = struct('n', n, 'k', k, 'm', m, 'iters', iters, ...
               'contrast', contrast, 'h0', h0, 't_snap', t_snap, ...
               'nc_T', nc_T, 'Z', 'Tsym_inverse', ...
               'lam_cut', lam_cut, 'lam_max_T', lam_max_T, ...
-              'kappa_exact', kappa_exact);
+              'kappa_exact', kappa_exact, ...
+              'pcg_iters_exact', pcg_iters_exact, ...
+              'Kmodes', Kmodes, 'seed', seed, ...
+              'pcg_tol', pcg_tol, 'pcg_maxit', pcg_maxit);
 save(fullfile(outDir, 'results.mat'), 'rows', 'meta', '-v7');
 write_results_csv(fullfile(outDir, 'results.csv'), rows);
 fprintf('\nresults.mat and results.csv written to:\n  %s\n', outDir);
 
 %% --- Render the two plots --------------------------------------------------
 fprintf('\n--- Rendering plots ---\n');
-make_inverse_plots(rows, outDir);
+make_inverse_plots(rows, outDir, pcg_iters_exact);
 
 fprintf('\nDone.\n');
 
@@ -354,12 +395,45 @@ function info = run_one_method(method, ops, P0, q, V_true)
         info.kappa_approx = c.kappa;
         info.kappa_ratio  = c.kappa / ops.kappa_exact;
         info.r_defl       = c.r;
+
+        % Downstream cost: iterations of the split two-level deflated PCG
+        % (B = L^-T P L^-1 on Ahat = Tsym) using the captured basis Q as the
+        % deflation set -- the empirical companion of kappa_ratio.  A poorly
+        % captured Q (non-SPD coarse matrix) throws inside deflation_P_apply
+        % and is caught below, leaving pcg_iters = NaN without dropping the row.
+        info.pcg_iters = split_two_level_pcg_iters( ...
+            Q, ops.A, ops.L, ops.Lt, ops.Zfun_Tsym, ops.lam_cut, ...
+            ops.b_pcg, ops.pcg_tol, ops.pcg_maxit);
     catch ME
         info.err = regexprep(ME.message, '\n.*', '');
         warning('run_inverse_subspace_iter:run_one_method_failed', ...
                 'method=%s q=%d failed: %s', method, q, info.err);
     end
     info.time_seconds = toc(t0);
+end
+
+function it = split_two_level_pcg_iters(W, A, L, Lt, Zfun_Tsym, tau, b, tol, maxit)
+%SPLIT_TWO_LEVEL_PCG_ITERS  PCG iterations for A x = b with a two-level precond.
+%   Runs pcg on the ORIGINAL system A x = b (pcg's matrix arg is @(X) A*X, RHS
+%   is the raw b), preconditioned by the split two-level operator
+%   B = L^-T P L^-1 (pcg's 5th arg).  The deflation operator P is BUILT on
+%   Ahat = Tsym = L^-1 A L^-T from the deflation basis span(W)
+%   (src.precond.deflation_P_apply, tau = lam_cut).  The solve is NOT run on
+%   Ahat -- only P is defined there.  This is the exact scheme used by
+%   solve_two_level in the repo's benchmarks (GP_train/ccpp/run_benchmark.m,
+%   +src/+solver/solve_deflate_M_P.m).
+%
+%   Returns the pcg iteration count (4th output of pcg), or NaN if the coarse
+%   matrix W'*Tsym*W is not numerically SPD (deflation_P_apply throws on the
+%   chol) or pcg errors -- a failure never invalidates the capture row.
+    try
+        Wd     = orth(full(W));                     % orthonormal deflation basis
+        Papply = src.precond.deflation_P_apply(Wd, Zfun_Tsym, tau);
+        Bapply = @(r) Lt \ (Papply(L \ r));         % B = L^-T P L^-1
+        [~, ~, ~, it] = pcg(@(X) A * X, b, tol, maxit, @(r) Bapply(r));
+    catch
+        it = NaN;
+    end
 end
 
 function lam_max = load_or_compute_lam_max(cacheDir, kind, op, n)
@@ -395,6 +469,7 @@ function info = new_capture_info()
         'n_angle_below_1pct', NaN, 'n_angle_below_0p1pct', NaN, ...
         'r_true', NaN, 'r_comp', NaN, ...
         'kappa_approx', NaN, 'kappa_ratio', NaN, 'r_defl', NaN, ...
+        'pcg_iters', NaN, ...
         'time_seconds', NaN, 'ok', false, 'err', '');
 end
 
@@ -420,17 +495,17 @@ function write_results_csv(csvPath, rows)
     fprintf(fid, ['P0_kind,method,P0_ncols,iter,', ...
                   'eigspace_err_2,eigspace_err_fro,angle_capture_frac_1pct,', ...
                   'n_angle_below_1pct,n_angle_below_0p1pct,r_true,r_comp,', ...
-                  'kappa_approx,kappa_ratio,r_defl,time_seconds\n']);
+                  'kappa_approx,kappa_ratio,r_defl,pcg_iters,time_seconds\n']);
     for i = 1:numel(rows)
         r = rows(i);
-        fprintf(fid, '%s,%s,%d,%d,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g\n', ...
+        fprintf(fid, '%s,%s,%d,%d,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g\n', ...
                 r.P0_kind, r.method, r.P0_ncols, r.iter, ...
                 r.eigspace_err_2, r.eigspace_err_fro, ...
                 r.angle_capture_frac_1pct, ...
                 r.n_angle_below_1pct, r.n_angle_below_0p1pct, ...
                 r.r_true, r.r_comp, ...
                 r.kappa_approx, r.kappa_ratio, r.r_defl, ...
-                r.time_seconds);
+                r.pcg_iters, r.time_seconds);
     end
     fclose(fid);
 end
@@ -466,25 +541,44 @@ function val = latitude_banding_eval(x, y, z, t, Tmax, kmin, kmax, bw, freqs) %#
     val = kmin + (kmax - kmin) * bump;
 end
 
+function kvec = generate_kvec(K)
+%GENERATE_KVEC  K wavenumber pairs (kx,ky) sorted by ascending frequency.
+%   Copied verbatim from run_krylov_capture.m / solve_deflate_M_P.m so the RHS
+%   matches the solver.
+    candidates = [];
+    maxk = ceil(sqrt(2*K)) + 1;
+    for kx = 0:maxk
+        for ky = 0:maxk
+            if kx == 0 && ky == 0, continue; end
+            candidates = [candidates; kx ky kx^2+ky^2]; %#ok<AGROW>
+        end
+    end
+    [~, idx] = sortrows(candidates, [3 1]);
+    kvec = candidates(idx(1:K), 1:2);
+end
+
 %% =========================================================================
 %% Rendering: two plots (+ aggregate PNG)
 %% =========================================================================
-function make_inverse_plots(rows, out_dir)
-%MAKE_INVERSE_PLOTS  Two capture plots vs iteration count, four series each.
+function make_inverse_plots(rows, out_dir, pcg_iters_exact)
+%MAKE_INVERSE_PLOTS  Four capture/cost plots vs iteration count, series each.
+%   pcg_iters_exact is the best-achievable PCG iteration count (exact V_true
+%   deflation), drawn as a reference line in the pcg_iters panel.
     if ~exist(out_dir, 'dir'), mkdir(out_dir); end
+    if nargin < 3, pcg_iters_exact = NaN; end
 
     specs = struct( ...
-        'metric', {'eigspace_err_2',        'angle_capture_frac_1pct',              'kappa_ratio'}, ...
-        'yscale', {'log',                   'linear',                               'log'}, ...
-        'ylabel', {'||(I-P)Q_{true}||_2',   'captured directions (sin\theta < 1%)', '\kappa_{approx} / \kappa_{exact}'}, ...
-        'title',  {'eigenspace error',      'angle capture fraction',               'deflated condition-number ratio'}, ...
-        'legloc', {'southwest',             'northeast',                            'northeast'}, ...
-        'tag',    {'eigspace_err2_inv',     'angle_capture_fraction_inv',           'kappa_ratio_inv'});
+        'metric', {'eigspace_err_2',        'angle_capture_frac_1pct',              'kappa_ratio',                      'pcg_iters'}, ...
+        'yscale', {'log',                   'linear',                               'log',                              'linear'}, ...
+        'ylabel', {'||(I-P)Q_{true}||_2',   'captured directions (sin\theta < 1%)', '\kappa_{approx} / \kappa_{exact}', 'PCG iterations to converge'}, ...
+        'title',  {'eigenspace error',      'angle capture fraction',               'deflated condition-number ratio',  'downstream PCG cost'}, ...
+        'legloc', {'southwest',             'northeast',                            'northeast',                        'northeast'}, ...
+        'tag',    {'eigspace_err2_inv',     'angle_capture_fraction_inv',           'kappa_ratio_inv',                  'pcg_iters_inv'});
 
     for ip = 1:numel(specs)
         fig = figure('Visible', 'off', 'Units', 'inches', ...
                      'Position', [0 0 5.4 3.4], 'Color', 'w');
-        draw_inverse_panel(axes(fig), rows, specs(ip));
+        draw_inverse_panel(axes(fig), rows, specs(ip), pcg_iters_exact);
         outfile = fullfile(out_dir, [specs(ip).tag '.pdf']);
         exportgraphics(fig, outfile, 'ContentType', 'vector');
         close(fig);
@@ -493,22 +587,25 @@ function make_inverse_plots(rows, out_dir)
 
     % Convenience side-by-side PNG.
     fig = figure('Visible', 'off', 'Units', 'inches', ...
-                 'Position', [0 0 16 3.6], 'Color', 'w');
-    tl = tiledlayout(fig, 1, 3, 'Padding', 'compact', 'TileSpacing', 'compact');
+                 'Position', [0 0 21 3.6], 'Color', 'w');
+    tl = tiledlayout(fig, 1, 4, 'Padding', 'compact', 'TileSpacing', 'compact');
     for ip = 1:numel(specs)
-        draw_inverse_panel(nexttile(tl), rows, specs(ip));
+        draw_inverse_panel(nexttile(tl), rows, specs(ip), pcg_iters_exact);
     end
     title(tl, ['Capture vs operator applications q: exact-inverse iteration ', ...
                'vs polynomial filters'], ...
           'FontWeight', 'bold', 'FontSize', 12);
-    outfile = fullfile(out_dir, 'aggregate_1x3.png');
+    outfile = fullfile(out_dir, 'aggregate_1x4.png');
     exportgraphics(fig, outfile, 'Resolution', 200);
     close(fig);
     fprintf('Wrote %s\n', outfile);
 end
 
-function draw_inverse_panel(ax, rows, spec)
-%DRAW_INVERSE_PANEL  One (metric vs iteration) panel overlaying the 4 series.
+function draw_inverse_panel(ax, rows, spec, pcg_iters_exact)
+%DRAW_INVERSE_PANEL  One (metric vs iteration) panel overlaying the series.
+%   pcg_iters_exact (optional) draws the exact-deflation floor in the
+%   pcg_iters panel.
+    if nargin < 4, pcg_iters_exact = NaN; end
     series = series_spec();
     hold(ax, 'on');
     legs    = cell(1, numel(series));
@@ -537,6 +634,12 @@ function draw_inverse_panel(ax, rows, spec)
 
     if strcmp(spec.metric, 'kappa_ratio')
         yline(ax, 1, ':', 'Color', [0.5 0.5 0.5], 'HandleVisibility', 'off');
+    elseif strcmp(spec.metric, 'pcg_iters') && isfinite(pcg_iters_exact)
+        yline(ax, pcg_iters_exact, '--', ...
+              sprintf('exact-deflation floor (%g)', pcg_iters_exact), ...
+              'Color', [0.4 0.4 0.4], 'LineWidth', 1.0, 'FontSize', 7, ...
+              'LabelHorizontalAlignment', 'left', ...
+              'LabelVerticalAlignment', 'bottom', 'HandleVisibility', 'off');
     end
 
     set(ax, 'XScale', 'linear', 'YScale', spec.yscale, 'Box', 'on', ...
@@ -549,6 +652,14 @@ function draw_inverse_panel(ax, rows, spec)
     if strcmp(spec.yscale, 'linear') && contains(spec.ylabel, 'capture')
         ylim(ax, [-0.02, 1.05]);
         set(ax, 'YTick', 0:0.2:1);
+    elseif strcmp(spec.metric, 'pcg_iters')
+        % Pad the y-range so the exact-deflation floor line stays on-screen.
+        yv = [yall(isfinite(yall)), pcg_iters_exact];
+        yv = yv(isfinite(yv));
+        if ~isempty(yv)
+            lo = min(yv);  hi = max(yv);  pad = 0.05 * max(hi - lo, 1);
+            ylim(ax, [max(0, lo - pad), hi + pad]);
+        end
     elseif strcmp(spec.yscale, 'log') && ~isempty(yall)
         yp = yall(yall > 0);
         if ~isempty(yp)
