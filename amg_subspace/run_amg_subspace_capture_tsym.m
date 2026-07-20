@@ -569,14 +569,19 @@ function make_section_plots(rows, configs, out_dir, sec_title)
                    '\kappa_{approx} / \kappa_{exact}'}, ...
         'title',  {'eigenspace error (Tsym)', 'angle capture fraction (Tsym)', ...
                    'deflated condition-number ratio (Tsym)'}, ...
-        'legloc', {'northeast', 'southeast', 'northeast'}, ...
         'tag',    {'eigspace_err2_vs_q', 'angle_capture_fraction_vs_q', ...
                    'kappa_ratio_vs_q'});
 
     for ip = 1:numel(specs)
         fig = figure('Visible', 'off', 'Units', 'inches', ...
-                     'Position', [0 0 5.4 3.4], 'Color', 'w');
-        draw_panel(axes(fig), rows, configs, specs(ip));
+                     'Position', [0 0 5.4 4.3], 'Color', 'w');
+        ax = axes(fig);
+        [h, keep, labels] = draw_panel(ax, rows, configs, specs(ip));
+        lgd = legend(ax, h(keep), labels, 'Location', 'southoutside', ...
+                     'Box', 'on', 'EdgeColor', [0.65 0.65 0.65], ...
+                     'Color', 'white', 'FontSize', 6.5, 'NumColumns', 3, ...
+                     'Interpreter', 'none');
+        lgd.ItemTokenSize = [14, 6];
         outfile = fullfile(out_dir, [specs(ip).tag '.pdf']);
         exportgraphics(fig, outfile, 'ContentType', 'vector');
         close(fig);
@@ -584,20 +589,36 @@ function make_section_plots(rows, configs, out_dir, sec_title)
     end
 
     fig = figure('Visible', 'off', 'Units', 'inches', ...
-                 'Position', [0 0 16.5 3.8], 'Color', 'w');
+                 'Position', [0 0 16.5 4.6], 'Color', 'w');
     tl = tiledlayout(fig, 1, 3, 'Padding', 'compact', 'TileSpacing', 'compact');
+    legHandles = gobjects(0);
+    legLabels  = {};
     for ip = 1:numel(specs)
-        draw_panel(nexttile(tl), rows, configs, specs(ip));
+        [h, keep, labels] = draw_panel(nexttile(tl), rows, configs, specs(ip));
+        if ip == 1
+            legHandles = h(keep);
+            legLabels  = labels;
+        end
     end
     title(tl, sec_title, 'FontWeight', 'bold', 'FontSize', 12);
+    lgd = legend(legHandles, legLabels, 'Box', 'on', ...
+                 'EdgeColor', [0.65 0.65 0.65], 'Color', 'white', ...
+                 'FontSize', 8, 'Interpreter', 'none', ...
+                 'NumColumns', ceil(numel(legLabels) / 2));
+    lgd.Layout.Tile = 'south';
+    lgd.ItemTokenSize = [18, 8];
     outfile = fullfile(out_dir, 'aggregate_1x3.png');
     exportgraphics(fig, outfile, 'Resolution', 200);
     close(fig);
     fprintf('Wrote %s\n', outfile);
 end
 
-function draw_panel(ax, rows, configs, spec)
-%DRAW_PANEL  One metric-vs-x panel with a series per config.
+function [handles, keep, labels] = draw_panel(ax, rows, configs, spec)
+%DRAW_PANEL  One metric-vs-x panel with a series per config.  Returns the line
+%   handles, the keep mask, and the labels so the CALLER places the legend
+%   (outside the axes), keeping it off the data.  Each series gets a distinct
+%   marker so overlapping same-color/same-style curves stay separable.
+    markers = {'o', 's', '^', 'd', 'v', '>', '<', 'p', 'h', '*'};
     hold(ax, 'on');
     handles = gobjects(1, numel(configs));
     keep    = false(1, numel(configs));
@@ -611,7 +632,8 @@ function draw_panel(ax, rows, configs, spec)
         sub = sub(ord);
         xs = [sub.(spec.xfield)];
         ys = [sub.(spec.metric)];
-        handles(ic) = plot(ax, xs, ys, [cfg.style 'o'], ...
+        mk = markers{mod(ic - 1, numel(markers)) + 1};
+        handles(ic) = plot(ax, xs, ys, [cfg.style mk], ...
                            'Color', cfg.color, 'MarkerFaceColor', cfg.color, ...
                            'MarkerSize', 3.5, 'LineWidth', 1.2);
         keep(ic) = true;
@@ -645,11 +667,7 @@ function draw_panel(ax, rows, configs, spec)
     title(ax, spec.title, 'FontSize', 11, 'FontWeight', 'bold', ...
           'Interpreter', 'tex');
 
-    lgd = legend(ax, handles(keep), {configs(keep).label}, ...
-                 'Location', spec.legloc, 'Box', 'on', ...
-                 'EdgeColor', [0.65 0.65 0.65], 'Color', 'white', ...
-                 'FontSize', 6.5, 'NumColumns', 2, 'Interpreter', 'none');
-    lgd.ItemTokenSize = [14, 6];
+    labels = {configs(keep).label};
 end
 
 function f = make_latitude_banding_contrast(Tmax, contrast)

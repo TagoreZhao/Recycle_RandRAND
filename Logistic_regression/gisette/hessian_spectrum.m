@@ -22,6 +22,7 @@ function spec = hessian_spectrum(X, w, lambda, opts)
 %     spec   : struct with fields
 %                eigs_small (smallest-K, ascending),
 %                eigs_large (largest-K, descending),
+%                eigs_full (full ascending spectrum in dense mode, else []),
 %                mode ("full"|"topk"), min, max, cond, lambda_floor,
 %                n_at_floor (count within 1.01*lambda; spike multiplicity).
 %
@@ -48,23 +49,29 @@ function spec = hessian_spectrum(X, w, lambda, opts)
         e  = sort(eig(H), 'ascend');
         eigs_small = e(1:ks);                       % ascending
         eigs_large = e(end:-1:end - ks + 1);        % descending (largest first)
+        eigs_full  = e;
         mode = "full";
         eMin = e(1);  eMax = e(end);  nFloor = sum(e <= 1.01 * lambda);
     else
         Hfun = hessian_operator(X, w, lambda);
-        eigsOpts = struct('IsFunctionSymmetric', true, ...
-                          'Tolerance', 1e-8, 'MaxIterations', 5000);
 
+        % eigs options MUST be name-value pairs: an options struct with these
+        % field names is silently ignored and symmetric Lanczos mode is lost.
         % Largest end: forward handle.
-        eL = eigs(Hfun, dim, ks, 'largestabs', eigsOpts);
+        eL = eigs(Hfun, dim, ks, 'largestabs', ...
+                  'IsFunctionSymmetric', true, 'Tolerance', 1e-8, ...
+                  'MaxIterations', 5000);
         eigs_large = sort(real(eL), 'descend');
 
         % Smallest end: inverse handle. eigs('smallestabs') with a function
         % handle is shift-invert and requires the handle to return H\x.
         Hinv = @(x) cg_apply(Hfun, x, 1e-8, min(dim, 2000));
-        eS = eigs(Hinv, dim, ks, 'smallestabs', eigsOpts);
+        eS = eigs(Hinv, dim, ks, 'smallestabs', ...
+                  'IsFunctionSymmetric', true, 'Tolerance', 1e-8, ...
+                  'MaxIterations', 5000);
         eigs_small = sort(real(eS), 'ascend');
 
+        eigs_full = [];
         mode = "topk";
         eMin = eigs_small(1);  eMax = eigs_large(1);
         nFloor = sum(eigs_small <= 1.01 * lambda);
@@ -76,6 +83,7 @@ function spec = hessian_spectrum(X, w, lambda, opts)
     spec = struct( ...
         'eigs_small',   eigs_small, ...
         'eigs_large',   eigs_large, ...
+        'eigs_full',    eigs_full, ...
         'mode',         mode, ...
         'min',          eMin, ...
         'max',          eMax, ...

@@ -23,7 +23,11 @@ function [beta, info, w] = logreg_newton(X, y, lambda, opts)
 %   Outputs
 %     beta   : (d+1)-by-1 solution [weights; bias].
 %     info   : struct (newton_iters, cg_iters_total, converged, train_acc,
-%              separable, obj_trace, gnorm_trace, cg_iters_per_step).
+%              separable, obj_trace, gnorm_trace, cg_iters_per_step,
+%              w_history). Column k of w_history (n-by-newton_iters) holds the
+%              IRLS weights defining the k-th linear system of the Newton
+%              sequence, H_k = Xa'diag(w_k)Xa + lambda*I; column 1 is the
+%              first system (beta = 0, so w_1 = 0.25 everywhere).
 %     w      : n-by-1 IRLS weights p.*(1-p) at the solution (for the Hessian).
 %
 %   See also hessian_operator, hessian_spectrum, sigmoid, pcg.
@@ -35,7 +39,7 @@ function [beta, info, w] = logreg_newton(X, y, lambda, opts)
     CGmaxit = get_opt(opts, 'CGmaxit', 500);
     Verbose = get_opt(opts, 'Verbose', false);
 
-    [~, d] = size(X);
+    [n, d] = size(X);
     beta = zeros(d + 1, 1);
 
     [f, g, p] = logreg_obj(beta, X, y, lambda);
@@ -44,6 +48,7 @@ function [beta, info, w] = logreg_newton(X, y, lambda, opts)
     obj_trace   = zeros(MaxIter + 1, 1);
     gnorm_trace = zeros(MaxIter + 1, 1);
     cg_per_step = zeros(MaxIter, 1);
+    w_history   = zeros(n, MaxIter);
     obj_trace(1)   = f;
     gnorm_trace(1) = norm(g);
 
@@ -57,6 +62,7 @@ function [beta, info, w] = logreg_newton(X, y, lambda, opts)
         it = it + 1;
 
         w    = p .* (1 - p);
+        w_history(:, it) = w;
         Hfun = hessian_operator(X, w, lambda);
         [delta, ~, ~, cgIt] = pcg(Hfun, -g, CGtol, CGmaxit);
         cg_per_step(it) = cgIt;
@@ -97,7 +103,8 @@ function [beta, info, w] = logreg_newton(X, y, lambda, opts)
         'separable',         train_acc >= 1 - eps, ...
         'obj_trace',         obj_trace(1:it + 1), ...
         'gnorm_trace',       gnorm_trace(1:it + 1), ...
-        'cg_iters_per_step', cg_per_step(1:it));
+        'cg_iters_per_step', cg_per_step(1:it), ...
+        'w_history',         w_history(:, 1:it));
 end
 
 %% --------- local helpers ---------
