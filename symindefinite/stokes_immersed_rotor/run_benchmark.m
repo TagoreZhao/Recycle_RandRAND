@@ -65,7 +65,7 @@ params.DEFLAT_LG_EIG       = 0;         % # largest-|lambda| deflation vectors (
 params.DEFLAT_Q            = 2;         % sketch power-iteration rounds (gaussian/sjlt V)
 params.DEFLAT_TAU          = 0.5;       % deflation coarse-correction weight tau
 params.DEFLAT_CHEB_DEGREE  = 4;         % Chebyshev degree (polynomial V; exact eigs band)
-params.DEFLAT_RECYCLE_K    = 200;        % # ILDL-preconditioned residuals recycled from the
+params.DEFLAT_RECYCLE_K    = 0;        % # ILDL-preconditioned residuals recycled from the
                                         % previous step into two_level_krylov's coarse space
 params.ILDL_MODE           = 'nofill';  % incomplete-LDL pattern: 'nofill' | 'droptol'
 params.ILDL_DROPTOL        = 1e-3;      % drop tolerance when ILDL_MODE = 'droptol'
@@ -115,7 +115,7 @@ if evalin('base', 'exist(''SMOKE_TEST'',''var'') && logical(SMOKE_TEST)')
     case_names = case_names(1);   % single (stress) case
 end
 
-results_root = fullfile(thisFileDir, 'benchmark_final_no_recycle');
+results_root = fullfile(thisFileDir, 'benchmark_no_krylov_recycle');
 if ~exist(results_root, 'dir'), mkdir(results_root); end
 
 %% ===================== 4. Loop over cases =================================

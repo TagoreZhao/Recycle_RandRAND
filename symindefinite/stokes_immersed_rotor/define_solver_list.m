@@ -59,11 +59,20 @@ function solvers = define_solver_list(params)
 %   iteration already IS the ILDL-preconditioned residual, so make_recording_pdef
 %   captures the last DEFLAT_RECYCLE_K of them as a free side effect of the ordinary
 %   minres call (no separate Lanczos, no extra matvec, iteration count unchanged).
-%   The block is carried in pc.cache and, at the next step, appended to the SAME
-%   Gaussian coarse space two_level_gaussian uses (augment_recycle_V) — so the pair
-%   is a controlled comparison, identical at step 1 where nothing is recycled yet.
-%   Ported from the SPD/PCG scheme in
+%   The block is carried in pc.cache — in PHYSICAL coordinates, see cached_basis —
+%   and, at the next step, mapped into that step's hat coordinates and appended to
+%   the SAME Gaussian coarse space two_level_gaussian uses (augment_recycle_V), so
+%   the pair is a controlled comparison, identical at step 1 where nothing is
+%   recycled yet.  Ported from the SPD/PCG scheme in
 %   Preconditioner_Recycle/report/ball_surface_krylov_recycle.
+%
+%   COORDINATES.  Every basis cached across steps — the coarse space V_<method> and
+%   the recycled block alike — is held in PHYSICAL coordinates and re-expressed in
+%   the current step's split coordinates on use.  The ILDL factor C is refreshed
+%   every step (ILDL_PREC_REFRESH = 1) while the bases are not (DEFLAT_PREC_REFRESH
+%   = Inf), and a basis in hat coordinates is only a REPRESENTATION of a physical
+%   subspace: freezing the representation across a refresh silently deflates a
+%   different subspace each step.  See cached_basis for the mechanism and the fix.
 %
 %   Mirrors define_motion_list (the geometry/motion registry).  Per the project
 %   convention, this preconditioner registry stays LOCAL to the benchmark (it
@@ -71,6 +80,14 @@ function solvers = define_solver_list(params)
 %   preconditioner-agnostic.
 
     if nargin < 1 || isempty(params), params = struct(); end
+
+    % --- coordinate-transport helpers ----------------------------------------
+    % transport_V / ildl_coordinate_map / orth_trunc live in the subspace_recycle
+    % study kernel and stay LOCAL (not promoted to +src) until the production
+    % numbers confirm the approach.  Bootstrapping the path here rather than in
+    % run_benchmark means every caller -- the benchmark, profile_components, the
+    % tests -- picks them up automatically and cannot forget.
+    add_transport_path();
 
     % --- per-preconditioner refresh cadences (report-style; Inf = build once) ---
     R_blkjac = getdef(params, 'BLOCKJAC_PREC_REFRESH', Inf);
@@ -169,21 +186,30 @@ function [x, fl, rr, it] = tl_solve_krylov(K, b, tol, mit, pc, opts, R_ildl, R_d
 % to be handed a recording preconditioner instead of the bare coarse operator.
 %
 % The harvested block is refreshed every step (a plain pc.cache set, NOT the
-% refresh-cadence `cached` path).  P and Vbase come from the SAME cache keys
-% two_level_gaussian uses, so the base coarse space is literally the same object and
-% the two solvers differ only by the recycled columns.
+% refresh-cadence `cached` path) and is held in PHYSICAL coordinates under the key
+% `krylov_U`, then mapped into this step's split coordinates on use — same reason
+% cached_basis stores the coarse space physically.  P and Vbase come from the SAME
+% cache keys two_level_gaussian uses, so the base coarse space is literally the
+% same object and the two solvers differ only by the recycled columns.
     [P, Vbase] = two_level_parts(K, pc, 'gaussian', opts, R_ildl, R_deflat, R_dinv);
 
-    % --- attach the previous step's block (guard freshness AND dimension: nC, and
-    %     hence size(K,1), can change when Lagrange points leave the fluid mesh) ---
+    % --- attach the previous step's block, mapped from PHYSICAL coordinates into
+    %     THIS step's hat coordinates.  It was harvested against C_{n-1}, and
+    %     ILDL_PREC_REFRESH = 1 rebuilds C from scratch, so reusing it verbatim
+    %     would recycle a DIFFERENT physical subspace (see cached_basis).  Guards
+    %     unchanged: freshness AND dimension (nC, and hence size(K,1), can change
+    %     when Lagrange points leave the fluid mesh).
+    %     No QR here on purpose: augment_recycle_V unit-normalizes the columns,
+    %     projects off Vbase and orth()s the remainder, so the raw C^T multiply is
+    %     all W needs -- truncating first would only throw information away.
     W = zeros(size(K, 1), 0);
-    if isKey(pc.cache, 'krylov_W')
-        e = pc.cache('krylov_W');
-        if e.step == pc.step - 1 && size(e.W, 1) == size(K, 1)
-            W = e.W;
+    if isKey(pc.cache, 'krylov_U')
+        e = pc.cache('krylov_U');
+        if e.step == pc.step - 1 && size(e.U, 1) == size(K, 1)
+            W = current_C(pc, P)' * e.U;             % C_n^T U : physical -> hat
         end
     end
-    V = augment_recycle_V(Vbase, W);
+    V = augment_recycle_V(Vbase, W);   % Vbase orthonormal, from cached_basis
 
     Afun  = @(y) P.applyCinv(K * P.applyCtinv(y));   % Ahat = C^-1 K C^-T
     btil  = P.applyCinv(b);                          % C^-1 b
@@ -194,7 +220,15 @@ function [x, fl, rr, it] = tl_solve_krylov(K, b, tol, mit, pc, opts, R_ildl, R_d
     [y, fl, rr, it] = minres(Afun, btil, tol, mit, Mfun);
     x = P.applyCtinv(y);                             % recover x = C^-T y
 
-    pc.cache('krylov_W') = struct('step', pc.step, 'W', getU());
+    % Store the harvest in PHYSICAL coordinates (U = C_n^-T W_hat) so the NEXT step
+    % -- whose ILDL factor is rebuilt from scratch -- recycles the SAME physical
+    % subspace rather than the same numbers in a different coordinate system.  The
+    % columns are raw, unnormalized MINRES residuals spanning many orders of
+    % magnitude; applyCtinv is linear, and augment_recycle_V removes the scale at
+    % the next step before its rank test.  The key is renamed krylov_W -> krylov_U
+    % so a stale cache from a pre-transport session cannot be read as if it were
+    % already physical.
+    pc.cache('krylov_U') = struct('step', pc.step, 'U', P.applyCtinv(getU()));
 end
 
 function [P, V] = two_level_parts(K, pc, method, opts, R_ildl, R_deflat, R_dinv)
@@ -218,8 +252,105 @@ function [P, V] = two_level_parts(K, pc, method, opts, R_ildl, R_deflat, R_dinv)
         dA = cached(pc, 'dinv', R_dinv, @() decomposition(K));
     end
     o = opts;  o.method = method;
-    V = cached(pc, ['V_' method], R_deflat, ...
-               @() src.precond.build_deflation_V(K, P, o, dA));
+    V = cached_basis(pc, ['V_' method], R_deflat, K, P, ...
+                     @() src.precond.build_deflation_V(K, P, o, dA));
+end
+
+function V = cached_basis(pc, key, refresh, K, P, buildFn)
+%CACHED_BASIS  Refresh cache for a DEFLATION BASIS, held in PHYSICAL coordinates.
+%
+% Same cadence as `cached`, but what is stored is the PHYSICAL basis U = C^-T V
+% rather than the hat-coordinate V that build_deflation_V returns.  MINRES runs on
+% the SPLIT operator Ahat_n = C_n^-1 K_n C_n^-T with yhat = C_n^T x, so a basis
+% expressed in hat coordinates denotes the physical subspace C_n^-T span(V).  With
+% ILDL_PREC_REFRESH = 1 the factor C is rebuilt from scratch every step -- ldl
+% re-derives the fill-reducing permutation p, the scaling S and the 1x1/2x2 pivot
+% structure of D from K_n -- so a V cached in hat coordinates silently denotes a
+% DIFFERENT physical subspace at every later step.  Storing U and mapping it
+% forward as V_n = orth(C_n^T U) preserves the physical span EXACTLY, because
+% C_n^-T (C_n^T U) = U.  Re-orthonormalizing changes the basis but not the span,
+% and deflation only sees the span (deflation_Psqrt_apply does need V'V = I for
+% its (I - VV') projector, which is what transport_V's orth_trunc supplies).
+%
+% Each entry carries TWO step stamps:
+%   .step   step at which U was BUILT               -> drives the refresh cadence
+%   .hstep  step whose hat coordinates .V is in     -> per-step transport memo
+% two_level_parts is called once per two-level solver entry per step (sjlt,
+% gaussian, polynomial, exact) AND a second time for 'gaussian' via
+% tl_solve_krylov, so without .hstep the C^T multiply + QR would run up to five
+% times per step.  Cost of the memo is one extra n-by-k block per method.
+%
+% At a (re)build step nothing is transported: build_deflation_V already returns an
+% orthonormal V in the CURRENT step's hat coordinates, so it is returned verbatim
+% and we pay only one applyCtinv to stash U.  Round-tripping through C^-T then C^T
+% would be both wasteful and slightly less accurate.
+    c = pc.cache;
+    n = size(K, 1);
+
+    rebuild = true;
+    if isKey(c, key)
+        e = c(key);
+        % size(K,1) changes when Lagrange points leave the fluid mesh; a physical
+        % basis with a stale row count cannot be transported, so force a rebuild.
+        rebuild = size(e.U, 1) ~= n || ...
+                  ((e.step ~= pc.step) && (mod(pc.step - 1, refresh) == 0));
+    end
+
+    if rebuild
+        V = buildFn();                                  % CURRENT-step hat coords
+        c(key) = struct('step',  pc.step, 'U', P.applyCtinv(V), ...
+                        'hstep', pc.step, 'V', V);
+        return;
+    end
+
+    if e.hstep == pc.step
+        V = e.V;                                        % memo hit within the step
+        return;
+    end
+
+    [V, info] = transport_V(e.U, P, current_C(pc, P));   % orth(C_n^T U)
+    if info.rank_drop > 0
+        % A smaller but clean coarse space beats a rank-deficient one (E = V'Ahat^2 V
+        % must stay SPD), but a silent shrink must not go unnoticed.
+        warning('define_solver_list:basisRankDrop', ...
+                ['step %d: transporting %s dropped %d of %d columns ' ...
+                 '(numerically dependent after the C^T map)'], ...
+                pc.step, key, info.rank_drop, info.k_in);
+    end
+    e.hstep = pc.step;
+    e.V     = V;
+    c(key)  = e;
+end
+
+function C = current_C(pc, P)
+%CURRENT_C  Explicit split factor C = S^-1 P^T L |D|^{1/2} for THIS step, memoized
+% so the two-level entries share one materialization instead of rebuilding it each.
+    c = pc.cache;
+    if isKey(c, 'ildl_C')
+        e = c('ildl_C');
+        if e.step == pc.step && size(e.val, 1) == numel(P.s)
+            C = e.val;
+            return;
+        end
+    end
+    C = ildl_coordinate_map(P);
+    c('ildl_C') = struct('step', pc.step, 'val', C);
+end
+
+function add_transport_path()
+%ADD_TRANSPORT_PATH  Put the subspace_recycle kernel on the MATLAB path.
+% Holds transport_V, ildl_coordinate_map and orth_trunc -- LOCAL helpers, not
+% promoted to +src.  Delete this call (and the transport wiring) to revert.
+    if ~isempty(which('transport_V')), return; end
+    thisDir   = fileparts(mfilename('fullpath'));
+    kernelDir = fullfile(fileparts(thisDir), 'linear_solves', ...
+                         'subspace_recycle', 'kernel');
+    if exist(kernelDir, 'dir')
+        addpath(kernelDir);
+    else
+        error('define_solver_list:noKernel', ...
+              'coordinate-transport kernel not found at %s', kernelDir);
+    end
 end
 
 function v = cached(pc, key, refresh, buildFn)

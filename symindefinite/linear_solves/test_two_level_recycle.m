@@ -19,6 +19,16 @@
 % stokes_immersed_rotor/define_solver_list.m, and it pins down the property the
 % whole design rests on: the recording tap must NOT change the iteration path.
 %
+% CAVEAT — read before trusting the step-2 numbers below.  Sections "step 1" and
+% "step 2" build P ONCE from A and reuse that same factor for the perturbed A2,
+% i.e. they exercise only the regime where the split coordinates are FROZEN.  The
+% benchmark refreshes the ILDL every step (ILDL_PREC_REFRESH = 1), and because a
+% coarse basis in split coordinates is a REPRESENTATION of a physical subspace
+% (V = C'U), a refreshed C makes frozen numbers denote a different subspace.  That
+% is why naive recycling works here and buys ~1% in the benchmark.  Section
+% "step 2c" below covers the refreshed-factor case; the full production-path test
+% is stokes_immersed_rotor/test_transport_wiring.m.
+%
 % Run extract_system.m first.
 %
 % See also: test_two_level_sketched, make_recording_pdef, augment_recycle_V,
@@ -113,6 +123,57 @@ assert(all([ref1.flag rec1.flag base2.flag recy2.flag] == 0), ...
        'a MINRES run did not converge');
 assert(max([ref1.tr rec1.tr base2.tr recy2.tr]) < 1e-6, ...
        'a two-level solution residual is too large');
+
+%% ===== step 2c: REFRESHED ILDL factor (the benchmark's ILDL_PREC_REFRESH=1) ==
+% Everything above froze P.  Here the factor is rebuilt from the perturbed system,
+% which is what the benchmark does every step, and the frozen basis/harvest are
+% compared against their transported counterparts.
+%
+% delta = 1.0, not the 0.05 used above: ldl derives its fill-reducing permutation
+% from the SPARSITY PATTERN, and perturb_coupling only rescales existing nonzeros,
+% so a small perturbation leaves p untouched and the comparison would be vacuous.
+% At delta = 1 the Bunch-Kaufman pivoting moves enough to reproduce the effect.
+% (The genuine pattern change — Lagrange points crossing triangle edges — is
+% covered on the real KKT sequence by test_transport_wiring.m.)
+addpath(fullfile(repoRoot, 'symindefinite', 'linear_solves', ...
+                 'subspace_recycle', 'kernel'));       % transport_V, orth_trunc
+[A3, b3] = perturb_coupling(A, b, meta, 1.0);
+P3 = src.precond.make_ildl_precond(A3, struct('mode', 'nofill'));
+fprintf('\n===== step 2c (refreshed ILDL factor, delta=100%%) =====\n');
+fprintf('  ldl permutation moved: %d of %d entries (%.1f%%)\n', ...
+        nnz(P.p ~= P3.p), n, 100 * nnz(P.p ~= P3.p) / n);
+
+Vbase3 = transport_V(P.applyCtinv(Vbase), P3);            % base space, transported
+% raw C3' multiply, no QR: augment_recycle_V normalizes, projects and orths it
+W3     = ildl_coordinate_map(P3)' * P.applyCtinv(rec1.W); % harvest, transported
+assert(size(Vbase3, 2) == size(Vbase, 2), ...
+       'step 2c: transport dropped %d base columns', size(Vbase,2) - size(Vbase3,2));
+assert(norm(Vbase3' * Vbase3 - eye(size(Vbase3, 2)), 'fro') < 1e-10, ...
+       'step 2c: transported base space is not orthonormal');
+
+nb3 = run_defl(A3, b3, tol, maxit, P3, Vbase,                              tau, 0);
+nr3 = run_defl(A3, b3, tol, maxit, P3, augment_recycle_V(Vbase,  rec1.W),  tau, 0);
+tb3 = run_defl(A3, b3, tol, maxit, P3, Vbase3,                             tau, 0);
+tr3 = run_defl(A3, b3, tol, maxit, P3, augment_recycle_V(Vbase3, W3),      tau, 0);
+
+fprintf('  %-34s %6s %8s %12s %12s\n', 'configuration', 'flag', 'iters', 'relres', 'true_res');
+print_row('frozen  V_base',            nb3);
+print_row('frozen  V_base + recycled', nr3);
+print_row('transported V_base',        tb3);
+print_row('transported V_base + recycled', tr3);
+fprintf('==================================================================\n');
+
+assert(all([nb3.flag nr3.flag tb3.flag tr3.flag] == 0), ...
+       'step 2c: a MINRES run did not converge');
+assert(tb3.iters <= nb3.iters, ...
+       'step 2c: transported base space is WORSE than frozen reuse (%d vs %d its)', ...
+       tb3.iters, nb3.iters);
+assert(tr3.iters <= nr3.iters, ...
+       'step 2c: transported recycling is WORSE than frozen recycling (%d vs %d its)', ...
+       tr3.iters, nr3.iters);
+assert(tr3.iters <= tb3.iters, ...
+       'step 2c: recycling on top of a transported base space hurt (%d vs %d its)', ...
+       tr3.iters, tb3.iters);
 
 %% ===== sweep the recycle count ===========================================
 % Re-run step 1 for each cap (the buffer keeps the LAST nrec residuals, so the

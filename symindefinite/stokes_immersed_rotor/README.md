@@ -344,8 +344,34 @@ cadences** — one knob per preconditioner component, mirroring the report's
 sequence; set to `N` to rebuild every `N` steps):
 `BLOCKJAC_PREC_REFRESH`, `ILDL_PREC_REFRESH`, `DEFLAT_PREC_REFRESH` (the basis
 $\hat V$), `DINVERSE_PREC_REFRESH` (the exact-inverse factor for sketched V).
-Recycling a frozen $\hat V$ is cheap but degrades as the solid moves — the
-trade-off this benchmark exists to measure.
+
+**Coordinates: $\hat V$ is a representation, not a subspace.** MINRES runs on
+$\hat A_n = C_n^{-1}\mathcal K_n C_n^{-\top}$ with $\hat y = C_n^\top x$, so a basis
+written in split coordinates denotes the *physical* subspace
+$C_n^{-\top}\,\mathrm{span}(\hat V)$. The defaults refresh the ILDL every step
+(`ILDL_PREC_REFRESH = 1`) but freeze the basis (`DEFLAT_PREC_REFRESH = Inf`), and
+`ldl` re-derives the permutation $p$, the scaling $S$ and the 1×1/2×2 pivot
+structure from $\mathcal K_n$ — **88–94 % of $p$ changes per step** on the moving
+cases. Reusing the same numbers therefore deflates a *different* physical subspace
+every step. This is a change of coordinates on the ambient space, which moves
+spans; it is not a change of basis within one, which deflation would not even
+notice. Left uncorrected it is catastrophic and silent: at benchmark scale a
+frozen $\hat V$ costs **266 iterations against 162 for no coarse space at all**,
+and `two_level_exact` — the *exact* smallest-$|\lambda|$ modes — collapses
+$54\to291$ in a single step on `bar_rotating` while holding at 62 forever on
+`disk_static`, where $\mathcal K$ (hence $C$) never changes.
+
+Every basis cached across steps — the coarse space and the recycled Krylov block
+alike — is therefore held in **physical** coordinates $U = C^{-\top}\hat V$ and
+re-expressed on use as $\hat V_n = \mathrm{orth}(C_n^\top U)$, which preserves the
+physical span exactly ($C_n^{-\top}C_n^\top U = U$) for one sparse multiply and one
+pivoted QR per step. See `cached_basis` in `define_solver_list.m`,
+`transport_V`/`ildl_coordinate_map` in
+`../linear_solves/subspace_recycle/kernel/`, and `test_transport_wiring.m`.
+
+What remains after that repair *is* the genuine trade-off this benchmark exists to
+measure: the operator itself moves, by a symmetric perturbation of rank $2n_C$ per
+step, so a frozen coarse space degrades gradually rather than instantly.
 
 ## 8. Industrial applications
 
@@ -439,6 +465,14 @@ per step on a `mod(step-1, refresh)==0` cadence (shared keys reused across solve
 entries within a step), so a preconditioner can be given its own
 `*_PREC_REFRESH` knob (set in `run_benchmark.m`, `Inf` = build once). Add a new
 **V-building operation** by adding a `case` to `build_deflation_V.m`.
+
+Deflation bases use `cached_basis` instead, which stores the **physical** basis
+`U = C^{-T} V` on the same cadence and maps it into the current step's split
+coordinates on use (see the coordinates note in §7). Its entries carry two step
+stamps: `.step` (when `U` was built — drives the refresh cadence) and `.hstep`
+(which step's coordinates `.V` is expressed in — a per-step memo, needed because
+`two_level_parts` is called once per two-level entry per step *and* a second time
+for `gaussian` via `two_level_krylov`).
 
 Nothing else changes: the CSV columns, per-solver plots, comparison plots,
 speedup summary and paper table all discover the new solver automatically.
