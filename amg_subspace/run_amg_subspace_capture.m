@@ -234,9 +234,12 @@ for ic = 1:numel(configs)
     else
         % Reseed per config: sjlt draws become reproducible AND distinct.
         rng(seed + ic);
+        % Per-config aggregate size (section E sweeps it; NaN = global default).
+        effMaxAgg = maxAggSize;
+        if isfinite(cfg.maxAggSize), effMaxAgg = cfg.maxAggSize; end
         [Mfun, ainfo] = make_amg_prec_ablate(A, ...
             'maxLevels', 2, 'minCoarseSize', minCoarse, ...
-            'theta', theta, 'maxAggSize', maxAggSize, ...
+            'theta', theta, 'maxAggSize', effMaxAgg, ...
             'omegaInterp', 0, 'omegaSmooth', omegaSmooth, ...
             'preSmooth', cfg.preSmooth, 'postSmooth', cfg.postSmooth, ...
             'coarseSolve', cfg.coarseSolve, ...
@@ -246,6 +249,12 @@ for ic = 1:numel(configs)
             'projector', cfg.projector, ...
             'sjltNc', cfg.sjltNc, 'sjltNnzPerCol', cfg.sjltNnzPerCol, ...
             'fineSmootherL', L, 'fineSmootherLt', Lt);
+
+        % Section E labels by the REALIZED coarse size (maxAggSize -> nc is
+        % emergent), so the legend reads the achieved nc, not the knob.
+        if strcmp(cfg.section, 'E_sa_coarse_size')
+            configs(ic).label = sprintf('SA nc=%d', ainfo.coarseN);
+        end
 
         fprintf('  levels %s  coarse=%s  setup=%.2fs  WU/apply=%.2f\n', ...
                 mat2str([ainfo.levels.n]), ainfo.coarseType, ...
@@ -298,6 +307,7 @@ function configs = make_configs(smoke)
                'coarseSolve', {}, 'coarseJacobiSweeps', {}, ...
                'coarsePcgTol', {}, 'coarsePcgMaxit', {}, ...
                'projector', {}, 'sjltNc', {}, 'sjltNnzPerCol', {}, ...
+               'maxAggSize', {}, ...
                'section', {}, 'label', {}, 'color', {}, 'style', {});
 
     add = @(C, name, pre, post, cs, nu, tol, mit, proj, nc, s, sect, col, st) ...
@@ -305,6 +315,7 @@ function configs = make_configs(smoke)
                    'coarseSolve', cs, 'coarseJacobiSweeps', nu, ...
                    'coarsePcgTol', tol, 'coarsePcgMaxit', mit, ...
                    'projector', proj, 'sjltNc', nc, 'sjltNnzPerCol', s, ...
+                   'maxAggSize', NaN, ...
                    'section', sect, 'label', name, 'color', col, 'style', st)];
 
     % --- references (drawn in every section) -------------------------------
@@ -351,6 +362,20 @@ function configs = make_configs(smoke)
                 1, 1, 'chol', NaN, NaN, NaN, ...
                 'sjlt', ncSweep(iv), 4, 'D_coarse_size', ncColors(iv,:), '--');
     end
+    % --- E_sa_coarse_size: single-pass SA coarse-size sweep via maxAggSize.
+    %     One aggregation pass floors at nc ~ n/4.6 (nc_sa, the baseline drawn
+    %     in every section); SMALLER maxAggSize -> smaller aggregates -> LARGER
+    %     nc, so this sweeps the achievable single-pass range [nc_sa, ~n/1.8]
+    %     upward from the baseline.  SA analog of section D; realized nc is read
+    %     back into the legend label at run time.  warm -> cool with growing nc.
+    masSweep  = [6 4 3 2];
+    masColors = [0.99 0.75 0.15;  0.85 0.45 0.20;  0.55 0.30 0.60;  0.20 0.45 0.80];
+    for iv = 1:numel(masSweep)
+        C = add(C, sprintf('sa_pre1_post1_chol_mas%02d', masSweep(iv)), ...
+                1, 1, 'chol', NaN, NaN, NaN, ...
+                'sa', NaN, NaN, 'E_sa_coarse_size', masColors(iv,:), '-');
+        C(end).maxAggSize = masSweep(iv);
+    end
 
     % Every config above re-orthonormalizes after each apply.  The _plain
     % twin of the exact-inverse reference iterates WITHOUT per-step orth
@@ -370,7 +395,8 @@ function configs = make_configs(smoke)
                         {'sa_pre1_post1_chol', 'exact_inverse', ...
                          'exact_inverse_plain', ...
                          'sa_pre0_post1_chol', 'sa_pre1_post1_jac2', ...
-                         'sjlt4_pre1_post1_chol_ncmatch'});
+                         'sjlt4_pre1_post1_chol_ncmatch', ...
+                         'sa_pre1_post1_chol_mas02'});
         C = C(keep);
     end
     configs = C;
@@ -468,33 +494,11 @@ end
 
 function [A, L, msh] = build_snapshot(h0, contrast, t_snap, dt, Tmax, mesh_method)
 %BUILD_SNAPSHOT  Mesh + A = D_II + dt*K_II + L = ichol(A,'nofill').
-%   Copied from subspace_capture/run_inverse_subspace_iter.m.
-    msh      = src.discretization.build_sphere_mesh(h0, false, mesh_method);
-    kappaFun = make_latitude_banding_contrast(Tmax, contrast);
-    A        = assemble_snapshot_A(msh, kappaFun, dt, t_snap);
-    L        = ichol_with_fallback(A);
-end
-
-function A = assemble_snapshot_A(msh, kappaFun, dt, tcur)
-%ASSEMBLE_SNAPSHOT_A  Build A = D_II + dt*K_II at one time level (closed sphere).
-    numIN   = msh.numIN;
-    kappa_e = kappaFun(msh.cent(:,1), msh.cent(:,2), msh.cent(:,3), tcur);
-    Vscale  = msh.Vunit .* repelem(kappa_e, 9);
-    Vii     = Vscale(msh.idxII);
-    K_II    = sparse(msh.I_II, msh.J_II, Vii, numIN, numIN);
-    A       = msh.D_II + dt * K_II;
-    A       = 0.5 * (A + A.');
-end
-
-function L = ichol_with_fallback(A)
-%ICHOL_WITH_FALLBACK  ichol(A,'nofill') with diagcomp safety net.
-    try
-        L = ichol(A, struct('type', 'nofill'));
-    catch
-        alpha    = max(sum(abs(A), 2) ./ diag(A)) - 2;
-        diagcomp = max(alpha, 0);
-        L = ichol(A, struct('type', 'nofill', 'diagcomp', diagcomp));
-    end
+%   Delegates to amg_bench_snapshot, the one shared definition of this test
+%   problem, so all three amg_subspace drivers assemble a bit-identical A --
+%   which is what keeps the (h0, k)-keyed eigenvector caches valid across them.
+%   Three outputs, so the RHS is not built here: this driver has no solver.
+    [A, L, msh] = amg_bench_snapshot(h0, contrast, t_snap, dt, Tmax, mesh_method);
 end
 
 function [V_true, lam_cut] = load_or_compute_eigs_A(cacheDir, A, dA, k, h0)
@@ -591,12 +595,14 @@ function make_amg_capture_plots(rows, configs, out_dir)
 %   the baseline config (section 'baseline') is drawn in every section so the
 %   four ablations are cross-comparable.  Sections with no member present in
 %   rows (smoke subsets) are skipped.
-    sections = {'A_smoothing', 'B_inner_solve', 'C_projector', 'D_coarse_size'};
+    sections = {'A_smoothing', 'B_inner_solve', 'C_projector', ...
+                'D_coarse_size', 'E_sa_coarse_size'};
     secTitles = { ...
         'A: pre/post smoothing sweeps (SA projector, exact coarse solve)', ...
         'B: coarse inner solve (SA projector, at/around pre=post=1)', ...
         'C: projector -- SA aggregation vs SJLT sketch at matched nc', ...
-        'D: SJLT (s=4) coarse-size sweep'};
+        'D: SJLT (s=4) coarse-size sweep', ...
+        'E: SA coarse-size sweep (single-pass, varied maxAggSize)'};
 
     ranConfigs = unique({rows.config});
     for is = 1:numel(sections)
@@ -732,33 +738,3 @@ function [handles, keep, labels] = draw_panel(ax, rows, configs, spec)
     labels = {configs(keep).label};
 end
 
-function f = make_latitude_banding_contrast(Tmax, contrast)
-%MAKE_LATITUDE_BANDING_CONTRAST  Latitude-banding kappa with adjustable contrast.
-%   Kept LOCAL (not in +src): kappa factories are experiment-specific.
-    if nargin < 2 || isempty(contrast), contrast = 60; end
-    if contrast < 1
-        error('make_latitude_banding_contrast:badContrast', ...
-              'contrast must be >= 1, got %g', contrast);
-    end
-    kmin = 1 / sqrt(contrast);
-    kmax = sqrt(contrast);
-    band_width = 0.25;
-    freqs = [sqrt(2), sqrt(3), sqrt(5)];
-    f = @(x, y, z, t) latitude_banding_eval(x, y, z, t, Tmax, kmin, kmax, ...
-                                            band_width, freqs);
-end
-
-function val = latitude_banding_eval(x, y, z, t, Tmax, kmin, kmax, bw, freqs) %#ok<INUSL>
-    theta = acos(max(min(z, 1), -1));   % colatitude [0, pi]
-    bump = zeros(size(x));
-    base_positions = [pi/4, pi/2, 3*pi/4];
-    for k = 1:3
-        center = base_positions(k) + 0.5 * sin(2 * pi * freqs(k) * t / Tmax);
-        center = max(0.1, min(pi - 0.1, center));
-        dist = abs(theta - center);
-        bump = bump + 0.5 + 0.5 * tanh((bw - dist) / 0.1);
-    end
-    bump = bump / 3;
-    bump = min(bump, 1);
-    val = kmin + (kmax - kmin) * bump;
-end

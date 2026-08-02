@@ -47,7 +47,7 @@ function V = build_deflation_V(A, P, opts, dA)
 % sketched/polynomial methods use forward power iteration on Ahat (which
 % converges to the largest-|lambda| modes).
 %
-% See also: make_ildl_precond, deflation_P_apply_indef, two_level_split_solve,
+% See also: make_ildl_precond, deflation_Psqrt_apply, two_level_split_solve,
 %           src.precond.subspace_iter_plain, src.precond.sjlt,
 %           src.precond.chebyshev_apply.
 

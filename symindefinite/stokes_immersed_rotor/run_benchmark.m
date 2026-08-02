@@ -6,12 +6,23 @@
 % changes because the solid moves.  Per step the system is solved by backslash
 % (ground truth) and by MINRES for every solver in the registry
 % (define_solver_list): the unpreconditioned solve, the SPD block-diagonal
-% "block Jacobi" preconditioner, incomplete-LDL, and the two-level deflation
-% family (L^-T P L^-1, with exact / gaussian / sjlt / polynomial coarse spaces).
+% "block Jacobi" preconditioner, incomplete-LDL, the two-level deflation family
+% (L^-T P L^-1, with exact / gaussian / sjlt / polynomial coarse spaces), and the
+% Krylov-recycling variant two_level_krylov.
 % Method knobs and per-preconditioner refresh cadences are set in the params
 % block below.  Add a preconditioner by appending one struct to
 % define_solver_list.m — CSV columns, plots and the summary table pick it up
 % automatically.
+%
+% Krylov recycling (two_level_krylov).  Consecutive KKT systems differ only through
+% the moving coupling block C(t_n), so the directions MINRES converged slowly on at
+% step n-1 are the ones it will converge slowly on at step n.  MINRES runs on the
+% SPLIT operator, so the vector it hands to its preconditioner each iteration already
+% IS the ILDL-preconditioned residual: the last DEFLAT_RECYCLE_K of them are captured
+% as a free side effect of the ordinary minres call (no extra matvec, iteration count
+% unchanged), then appended to the SAME gaussian coarse space two_level_gaussian
+% uses.  Refreshed every step; at step 1 nothing is recycled yet, so the two solvers
+% are identical there and differ only by the recycled columns afterwards.
 %
 % Output (mirrors report/naca0012/benchmark_final), written to benchmark_final/:
 %   all_results.csv, speedup_summary.csv, paper_summary_table.csv,
@@ -49,11 +60,13 @@ params.DINVERSE_PREC_REFRESH = Inf;   % exact A^{-1} factor (sketched V methods)
 % Two-level / deflation method parameters (shared by all two-level V methods;
 % consumed by define_solver_list -> build_deflation_V).  Defaults mirror
 % report/ball_surface/run_benchmark.m.
-params.DEFLAT_SM_EIG       = 0;       % # smallest-|lambda| deflation vectors (report sm_eig)
-params.DEFLAT_LG_EIG       = 500;         % # largest-|lambda| deflation vectors (report lg_eig; 0=off)
+params.DEFLAT_SM_EIG       = 500;       % # smallest-|lambda| deflation vectors (report sm_eig)
+params.DEFLAT_LG_EIG       = 0;         % # largest-|lambda| deflation vectors (report lg_eig; 0=off)
 params.DEFLAT_Q            = 2;         % sketch power-iteration rounds (gaussian/sjlt V)
 params.DEFLAT_TAU          = 0.5;       % deflation coarse-correction weight tau
 params.DEFLAT_CHEB_DEGREE  = 4;         % Chebyshev degree (polynomial V; exact eigs band)
+params.DEFLAT_RECYCLE_K    = 200;        % # ILDL-preconditioned residuals recycled from the
+                                        % previous step into two_level_krylov's coarse space
 params.ILDL_MODE           = 'nofill';  % incomplete-LDL pattern: 'nofill' | 'droptol'
 params.ILDL_DROPTOL        = 1e-3;      % drop tolerance when ILDL_MODE = 'droptol'
 
@@ -102,7 +115,7 @@ if evalin('base', 'exist(''SMOKE_TEST'',''var'') && logical(SMOKE_TEST)')
     case_names = case_names(1);   % single (stress) case
 end
 
-results_root = fullfile(thisFileDir, 'benchmark_final_large');
+results_root = fullfile(thisFileDir, 'benchmark_final_no_recycle');
 if ~exist(results_root, 'dir'), mkdir(results_root); end
 
 %% ===================== 4. Loop over cases =================================

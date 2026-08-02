@@ -8,8 +8,16 @@ symindefinite/stokes_immersed_rotor/output/
 symindefinite/linear_solves/output/
 symindefinite/linear_solves/*.mat
 
+# subspace-recycling diagnosis study (regenerated on run)
+symindefinite/linear_solves/subspace_recycle/*/output/
+symindefinite/linear_solves/subspace_recycle/kernel/cache/
+
 # AMG subspace-capture ablation outputs (regenerated on run)
 amg_subspace/output/
 amg_subspace/output_smoke/
 amg_subspace/output_tsym/
 amg_subspace/output_tsym_smoke/
+
+# AMG deflation-vs-preconditioning study outputs (regenerated on run)
+amg_subspace/output_defl/
+amg_subspace/output_defl_smoke/

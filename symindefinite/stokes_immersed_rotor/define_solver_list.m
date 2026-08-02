@@ -48,8 +48,22 @@ function solvers = define_solver_list(params)
 %     DEFLAT_Q             sketch power-iteration rounds (gaussian/sjlt V)
 %     DEFLAT_TAU           deflation coarse-correction weight tau
 %     DEFLAT_CHEB_DEGREE   Chebyshev degree (polynomial V; exact eigs band)
+%     DEFLAT_RECYCLE_K     # Krylov vectors recycled per step (two_level_krylov)
 %     ILDL_MODE            incomplete-LDL pattern: 'nofill' | 'droptol'
 %     ILDL_DROPTOL         drop tolerance when ILDL_MODE = 'droptol'
+%
+%   Krylov recycling (the 'two_level_krylov' entry).  Consecutive KKT systems differ
+%   only through the moving coupling block C(t_n), so the directions MINRES converged
+%   slowly on at step n-1 are the ones it will converge slowly on at step n.  Because
+%   MINRES runs on the SPLIT operator, the vector it hands to its preconditioner each
+%   iteration already IS the ILDL-preconditioned residual, so make_recording_pdef
+%   captures the last DEFLAT_RECYCLE_K of them as a free side effect of the ordinary
+%   minres call (no separate Lanczos, no extra matvec, iteration count unchanged).
+%   The block is carried in pc.cache and, at the next step, appended to the SAME
+%   Gaussian coarse space two_level_gaussian uses (augment_recycle_V) — so the pair
+%   is a controlled comparison, identical at step 1 where nothing is recycled yet.
+%   Ported from the SPD/PCG scheme in
+%   Preconditioner_Recycle/report/ball_surface_krylov_recycle.
 %
 %   Mirrors define_motion_list (the geometry/motion registry).  Per the project
 %   convention, this preconditioner registry stays LOCAL to the benchmark (it
@@ -75,7 +89,8 @@ function solvers = define_solver_list(params)
         'tau',          getdef(params, 'DEFLAT_TAU',          0.5), ...
         'ildl_mode',    getdef(params, 'ILDL_MODE',           'nofill'), ...
         'droptol',      getdef(params, 'ILDL_DROPTOL',        1e-3), ...
-        'cheb_degree',  getdef(params, 'DEFLAT_CHEB_DEGREE',  12));
+        'cheb_degree',  getdef(params, 'DEFLAT_CHEB_DEGREE',  12), ...
+        'recycle_k',    getdef(params, 'DEFLAT_RECYCLE_K',    50));
 
     solvers = {};
 
@@ -99,7 +114,7 @@ function solvers = define_solver_list(params)
                  tl_solve(K, b, tol, mit, pc, 'none', DEFL, R_ildl, R_deflat, R_dinv));
 
     % Two-level deflation (ILDL smoother + indefinite deflation, B = L^-T P L^-1),
-    % one entry per V-building operation.  'exact' last -> featured in accuracy.png.
+    % one entry per V-building operation.
     for m = {'sjlt', 'gaussian', 'polynomial', 'exact'}
         meth = m{1};
         key  = ['two_level_' meth];
@@ -111,6 +126,18 @@ function solvers = define_solver_list(params)
             'solve', @(K,b,tol,mit,pc) ...
                      tl_solve(K, b, tol, mit, pc, meth, opts, R_ildl, R_deflat, R_dinv)); %#ok<AGROW>
     end
+
+    % Krylov recycling: the gaussian coarse space + the last DEFLAT_RECYCLE_K
+    % ILDL-preconditioned residuals harvested from the PREVIOUS step's solve.
+    % Registered LAST -> featured in accuracy.png and the engine's progress print.
+    kopts = DEFL;  kopts.method = 'gaussian';
+    solvers{end+1} = struct( ...
+        'key',   'two_level_krylov', ...
+        'label', sprintf('MINRES (ILDL + deflation, gaussian V + %d recycled Krylov)', ...
+                         kopts.recycle_k), ...
+        'build', [], ...
+        'solve', @(K,b,tol,mit,pc) ...
+                 tl_solve_krylov(K, b, tol, mit, pc, kopts, R_ildl, R_deflat, R_dinv));
 
     solvers = solvers(:);
 end
@@ -131,6 +158,49 @@ function [x, fl, rr, it] = tl_solve(K, b, tol, mit, pc, method, opts, R_ildl, R_
 %TL_SOLVE  Split two-level solve.  Builds (and refreshes, per-component) the ILDL
 % factor, the optional exact-inverse factor and the coarse basis V, then runs the
 % split-operator MINRES via src.precond.two_level_split_solve.
+    [P, V] = two_level_parts(K, pc, method, opts, R_ildl, R_deflat, R_dinv);
+    [x, fl, rr, it] = src.precond.two_level_split_solve(K, b, tol, mit, P, V, opts.tau);
+end
+
+function [x, fl, rr, it] = tl_solve_krylov(K, b, tol, mit, pc, opts, R_ildl, R_deflat, R_dinv)
+%TL_SOLVE_KRYLOV  Split two-level solve whose coarse space is the cached gaussian V
+% AUGMENTED with the ILDL-preconditioned residuals recycled from the PREVIOUS step.
+% Same recipe as src.precond.two_level_split_solve, inlined only because MINRES has
+% to be handed a recording preconditioner instead of the bare coarse operator.
+%
+% The harvested block is refreshed every step (a plain pc.cache set, NOT the
+% refresh-cadence `cached` path).  P and Vbase come from the SAME cache keys
+% two_level_gaussian uses, so the base coarse space is literally the same object and
+% the two solvers differ only by the recycled columns.
+    [P, Vbase] = two_level_parts(K, pc, 'gaussian', opts, R_ildl, R_deflat, R_dinv);
+
+    % --- attach the previous step's block (guard freshness AND dimension: nC, and
+    %     hence size(K,1), can change when Lagrange points leave the fluid mesh) ---
+    W = zeros(size(K, 1), 0);
+    if isKey(pc.cache, 'krylov_W')
+        e = pc.cache('krylov_W');
+        if e.step == pc.step - 1 && size(e.W, 1) == size(K, 1)
+            W = e.W;
+        end
+    end
+    V = augment_recycle_V(Vbase, W);
+
+    Afun  = @(y) P.applyCinv(K * P.applyCtinv(y));   % Ahat = C^-1 K C^-T
+    btil  = P.applyCinv(b);                          % C^-1 b
+    Ahat2 = @(z) Afun(Afun(z));                      % Ahat^2 (SPD)
+    Pdef  = src.precond.deflation_Psqrt_apply(V, Ahat2, opts.tau, 'handle');
+    [Mfun, getU] = make_recording_pdef(Pdef, numel(btil), opts.recycle_k);
+
+    [y, fl, rr, it] = minres(Afun, btil, tol, mit, Mfun);
+    x = P.applyCtinv(y);                             % recover x = C^-T y
+
+    pc.cache('krylov_W') = struct('step', pc.step, 'W', getU());
+end
+
+function [P, V] = two_level_parts(K, pc, method, opts, R_ildl, R_deflat, R_dinv)
+%TWO_LEVEL_PARTS  The cached ILDL factor and coarse basis for one V-building method.
+% Shared by every two-level entry, so the ildl / dinv / V_<method> keys are built at
+% most once per refresh-step no matter how many solvers ask for them.
     ikey = ['ildl_' opts.ildl_mode];
     ildl_opts = struct('mode', opts.ildl_mode);
     if strcmp(opts.ildl_mode, 'droptol'), ildl_opts.droptol = opts.droptol; end
@@ -139,19 +209,17 @@ function [x, fl, rr, it] = tl_solve(K, b, tol, mit, pc, method, opts, R_ildl, R_
 
     if strcmp(method, 'none')
         V = [];
-    else
-        dA = [];
-        % Only the smallest-mode inverse-power sketch needs A^-1; the large-only
-        % ablation (sm_eig=0) sketches the forward operator Ahat, so skip it then.
-        if any(strcmp(method, {'gaussian', 'sjlt'})) && opts.sm_eig >= 1
-            dA = cached(pc, 'dinv', R_dinv, @() decomposition(K));
-        end
-        o = opts;  o.method = method;
-        V = cached(pc, ['V_' method], R_deflat, ...
-                   @() src.precond.build_deflation_V(K, P, o, dA));
+        return;
     end
-
-    [x, fl, rr, it] = src.precond.two_level_split_solve(K, b, tol, mit, P, V, opts.tau);
+    dA = [];
+    % Only the smallest-mode inverse-power sketch needs A^-1; the large-only
+    % ablation (sm_eig=0) sketches the forward operator Ahat, so skip it then.
+    if any(strcmp(method, {'gaussian', 'sjlt'})) && opts.sm_eig >= 1
+        dA = cached(pc, 'dinv', R_dinv, @() decomposition(K));
+    end
+    o = opts;  o.method = method;
+    V = cached(pc, ['V_' method], R_deflat, ...
+               @() src.precond.build_deflation_V(K, P, o, dA));
 end
 
 function v = cached(pc, key, refresh, buildFn)

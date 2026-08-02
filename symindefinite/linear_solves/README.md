@@ -15,6 +15,8 @@ MINRES, without re-running the full FEM time-stepping pipeline.
 | `deflation_P_apply_indef.m` | Two-level **deflation** operator `P = (I−VV') + τ·V\|E\|⁻¹V'` for the **indefinite** case (revisable copy of `+src/+precond/deflation_P_apply.m`, with `chol(E)` → `\|E\|⁻¹` SPD-ification so it is a valid MINRES preconditioner). |
 | `test_deflation_minres.m` | Validate `deflation_P_apply_indef` on `A` directly: deflation as a standalone SPD MINRES preconditioner, plus an additive `M⁻¹+Q` combination; `k`/`τ` sweep. |
 | `test_two_level_minres.m` | **Additive vs multiplicative** two-level head-to-head on the *same* coarse space (eigvecs of the smoothed operator `Â=C⁻¹AC⁻ᵀ`); `k`/`τ` sweep → `output/two_level_minres.{csv,png}`. |
+| `test_two_level_sketched.m` | **Exact vs sketched** coarse space of the same size `k`, plus a sweep over the power-iteration count `q` → `output/two_level_sketched.{csv,png}`. |
+| `test_two_level_recycle.m` | **Krylov recycling** across two consecutive (perturbed) systems: capture the ILDL-preconditioned residuals of solve 1 for free, append them to the coarse space of solve 2; sweep the recycle count → `output/two_level_recycle.{csv,png}`. |
 
 ## How to run
 
@@ -161,6 +163,49 @@ reorthogonalized) iteration loses numerical rank as `q` grows — a re-orthogona
 `subspace_iter` or a sketched-QR stabilization (as in the `+src` `re==2` path)
 would be needed to push `q` much higher. See
 `output/two_level_sketched_convergence.png`.
+
+### Recycling the Krylov subspace across steps
+
+The benchmark solves a *sequence* of KKT systems that differ only through the
+moving coupling block `C(tₙ)`, so the directions MINRES converged slowly on at
+step `n−1` are the ones it will converge slowly on at step `n`. Those directions
+come for free: MINRES runs on the **split** operator `Â = C⁻¹AC⁻ᵀ`, so the vector
+it hands to its preconditioner each iteration *is* the ILDL-preconditioned
+residual `C⁻¹(b − Ax)`, the vector that spans the Krylov subspace the solve
+explored.
+
+`stokes_immersed_rotor/make_recording_pdef.m` wraps the coarse operator and
+records those vectors into a circular buffer keeping the **last** `K` of them.
+The capture is a pure side effect of the ordinary `minres` call — no separate
+Lanczos, no extra matvec, and the iteration path is bit-identical (asserted in
+`test_two_level_recycle.m`). At the next step
+`stokes_immersed_rotor/augment_recycle_V.m` forms
+
+```
+V = [V_base, orth(W − V_base V_baseᵀ W)],     W = unit-scaled recycled columns
+```
+
+so the block is carried **raw** and `orth` is applied only at the point it
+becomes a deflation basis — dropping numerically dependent columns there is what
+keeps `V̂ᵀÂ²V̂` safely SPD for `deflation_Psqrt_apply`. This is the indefinite/
+MINRES port of the SPD/PCG scheme in
+`Preconditioner_Recycle/report/ball_surface_krylov_recycle`.
+
+Observed on the frozen `n≈5840` KKT (Gaussian base space `k=100`, `τ=1`, step 2 =
+5 % perturbation of the coupling block):
+
+| # recycled | coarse dim | step-2 iters |
+|---|---|---|
+| 0 | 100 | 127 |
+| 10 | 110 | 121 |
+| 25 | 125 | 115 |
+| 50 | 150 | 113 |
+| 100 | 200 | 105 |
+
+Registered in the benchmark as the `two_level_krylov` solver, sharing the cached
+`V_gaussian` coarse space with `two_level_gaussian` so the two differ *only* by
+the recycled columns (and are identical at step 1, where nothing is recycled
+yet). The count is `params.DEFLAT_RECYCLE_K` (default 50).
 
 ## Later: register in the benchmark
 

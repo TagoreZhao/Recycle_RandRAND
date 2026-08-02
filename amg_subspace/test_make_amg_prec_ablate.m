@@ -193,4 +193,34 @@ assert(d <= 1e-6, 'T8: nc=n pure CGC differs from A^{-1}: %.3e', d);
 fprintf('PASS T8: sjlt nc=n pure CGC equals A^{-1} (rel err %.2e, coarse=%s)\n', ...
         d, info.coarseType);
 
+%% T9: single-pass SA coarse size is a live knob via maxAggSize (section E)
+% The E_sa_coarse_size sweep varies maxAggSize to move the SA coarse size.
+% Each maxAggSize must yield a valid 2-level SPD hierarchy the sweep can run,
+% and coarseN must actually RESPOND to the knob (>= 2 distinct sizes over the
+% sweep).  The magnitude/direction of the response is mesh-dependent -- clean
+% and monotone on the sphere FEM operator, weak on this structured 5-point
+% grid where aggregates fragment -- so only the responds-at-all invariant is
+% asserted here.
+masList = [2 3 4 6 16];
+ncByMas = zeros(size(masList));
+for iv = 1:numel(masList)
+    args = {'maxLevels', 2, 'minCoarseSize', 1, 'theta', 0.05, ...
+            'omegaSmooth', 2/3, 'omegaInterp', 0, 'maxAggSize', masList(iv), ...
+            'preSmooth', 1, 'postSmooth', 1, 'coarseSolve', 'chol', ...
+            'fineSmootherL', L, 'fineSmootherLt', Lt};
+    [~, infoE] = make_amg_prec_ablate(A, args{:});
+    assert(infoE.nLevels == 2, 'T9: expected 2 levels, got %d', infoE.nLevels);
+    assert(strcmp(infoE.coarseType, 'chol'), ...
+           'T9: coarse chol failed for maxAggSize=%d', masList(iv));
+    assert(infoE.coarseN >= 1 && infoE.coarseN < n, ...
+           'T9: coarseN=%d out of range for maxAggSize=%d', ...
+           infoE.coarseN, masList(iv));
+    ncByMas(iv) = infoE.coarseN;
+end
+assert(numel(unique(ncByMas)) >= 2, ...
+       'T9: maxAggSize is an inert knob, coarseN constant: %s', ...
+       mat2str(ncByMas));
+fprintf('PASS T9: maxAggSize is a live SA coarseN knob (mas %s -> nc %s)\n', ...
+        mat2str(masList), mat2str(ncByMas));
+
 fprintf('\nAll make_amg_prec_ablate tests passed.\n');

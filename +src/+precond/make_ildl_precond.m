@@ -33,7 +33,7 @@ function P = make_ildl_precond(A, opts)
 %     .nnzL .fill_ratio               diagnostics (vs nnz(tril(A)))
 %     .mode .droptol
 %
-%   See also: ldl, minres, src.precond.deflation_P_apply_indef,
+%   See also: ldl, minres, src.precond.deflation_Psqrt_apply,
 %   test_ildl_minres, make_ildl_precond>abs_block_diag.
 
     if nargin < 2 || isempty(opts), opts = struct(); end
