@@ -43,7 +43,24 @@ function cs = make_case(family, idx, opts)
 %     .A .C .M                  system, chart factor, metric
 %     .applyCinv .applyCtinv    the split solves (Ahat = C^-1 A C^-T)
 %     .P                        the ILDL struct ([] for 'ichol')
+%     .defl_kind .tau           which coarse correction this family takes, and
+%                               its weight -- see below
 %     .n .family .idx .label .param
+%
+%   THE COARSE CORRECTION IS PART OF THE FAMILY.  'ildl' carries
+%   defl_kind = 'indef' and 'ichol' carries defl_kind = 'spd', because an SPD and
+%   a symmetric indefinite system need different coarse operators:
+%
+%     spd    P = (I-VV') + tau     V (V' Ahat   V)^{-1}   V'   , solved by PCG
+%     indef  G = (I-VV') + sqrt(tau) V (V' Ahat^2 V)^{-1/2} V'   , solved by MINRES
+%
+%   The indefinite form squares the operator only to make the coarse matrix
+%   positive definite, which is unnecessary -- and, per exp6, actively costly in
+%   angular tolerance -- when Ahat is already SPD.  Both defaults are tau = 0.5,
+%   the production value in each family; override with opts.tau.  Captured modes
+%   therefore land on tau = 0.5 under 'spd' and on +-sqrt(tau) = +-0.707 under
+%   'indef', so iteration counts are comparable WITHIN a family but not across.
+%   See coarse_correction.m for the full statement.
 %
 %   The heavy base data (the Stokes sequence, the kernel matrix) is built once
 %   and memoized, so a loop over IDX pays for it only on the first call.
@@ -62,6 +79,7 @@ function cs = make_case(family, idx, opts)
     cs.family = lower(family);
     cs.idx    = idx;
     cs.n      = size(cs.A, 1);
+    cs.tau    = getdef(opts, 'tau', 0.5);
     if getdef(opts, 'want_M', true)
         cs.M = cs.C * cs.C';
         cs.M = (cs.M + cs.M') / 2;
@@ -86,6 +104,7 @@ function cs = case_ildl(idx, opts)
     cs.param      = idx;                       % the "time" coordinate
     cs.label      = sprintf('ildl step %d', idx);
     cs.nC         = S.nC;
+    cs.defl_kind  = 'indef';                   % A is symmetric indefinite
 end
 
 function cs = case_ichol(idx, opts)
@@ -110,6 +129,7 @@ function cs = case_ichol(idx, opts)
     cs.param      = sig2;
     cs.label      = sprintf('ichol sigma2=%.3g', sig2);
     cs.nC         = 0;
+    cs.defl_kind  = 'spd';                     % A is SPD
 end
 
 %==========================================================================

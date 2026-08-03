@@ -5,7 +5,7 @@ same thing barely happens with `ichol`, and why re-charting the cached subspace 
 
 Every claim below is a statement about **subspaces**, and every one that can be tested
 numerically has an experiment in `experiments/` that either confirms it or fails loudly.
-`output/verdicts.csv` is the score: **51 PASS, 0 FAIL, 25 REPORT** at the settings quoted
+`output/verdicts.csv` is the score: **59 PASS, 0 FAIL, 25 REPORT** at the settings quoted
 throughout (`experiments/run_all.m`, ~40 s). A REPORT row is a measurement with no
 pass/fail attached; one of them records a theorem that turns out to be *inapplicable* on
 the family this study is about, which is a result in its own right (§2, Thm 2.3).
@@ -25,8 +25,20 @@ the family this study is about, which is a result in its own right (§2, Thm 2.3
 | $T_n$ | the **transport** $C_{n+1}^{\top}C_n^{-\top} = \Phi_{n+1}\circ\Phi_n^{-1}$ |
 | $\mathcal U_k(A,M)$ | invariant subspace of the pencil $(A,M)$ for the $k$ smallest $\lvert\lambda\rvert$ — the physical deflation target |
 | $\hat V,\ U$ | an **orthonormal** basis of the chart-side / physical-side space; results are stated for spans, but the formulas below are the span's formulas only in an orthonormal basis |
-| $G$ | the coarse correction actually applied, $\;(I-\Pi)+\sqrt{\tau}\,\hat V(\hat V^{\top}\hat A^{2}\hat V)^{-1/2}\hat V^{\top}$ |
+| $G$ | the coarse correction actually applied. **It is not the same operator in the two families** — see below |
+| $G_{\rm spd}$ | $(I-\Pi)+\tau\,\hat V(\hat V^{\top}\hat A\hat V)^{-1}\hat V^{\top}$, built on $\hat A$; the `ichol` column, run by PCG |
+| $G_{\rm ind}$ | $(I-\Pi)+\sqrt{\tau}\,\hat V(\hat V^{\top}\hat A^{2}\hat V)^{-1/2}\hat V^{\top}$, built on $\hat A^{2}$; the `ildl` column, run by MINRES |
 | $\tau,\,k,\,n_C$ | coarse weight (0.5); coarse dimension; number of coupling rows |
+
+**The coarse correction is part of the family.** $\hat V^{\top}\hat A\hat V$ has no definite sign
+when $\hat A$ is indefinite, so the coarse solve breaks; squaring the operator restores
+definiteness, and the half power then undoes the squaring's effect on the scale, since
+$(\hat V^{\top}\hat A^{2}\hat V)^{-1/2}\to\lvert\Lambda\rvert^{-1}$ on an invariant span. When
+$\hat A$ is already SPD none of that is needed, and §4.1 measures what it costs to do it anyway.
+Captured modes land on $\tau$ under $G_{\rm spd}$ and on $\pm\sqrt{\tau}$ under $G_{\rm ind}$, and
+the two families are solved by different Krylov methods, so **iteration counts below are
+comparable within a column and not across**. `kernel/coarse_correction.m`,
+`kernel/two_level_solve_local.m`.
 
 **Standing assumption.** $\lvert\lambda_k\rvert<\lvert\lambda_{k+1}\rvert$ strictly, for every
 pencil named below. Otherwise "the $k$ smallest $\lvert\lambda\rvert$" is not a spectral set
@@ -90,10 +102,13 @@ they agree to $3\cdot10^{-16}$ (ILDL) and $1\cdot10^{-16}$ (ichol).
 orthonormal columns, $G$ — and hence the spectrum of $G\hat A$ — is unchanged under
 $\hat V\mapsto\hat VQ$ for every $Q\in O(k)$. Since any two orthonormal bases of a subspace
 differ by such a $Q$, $G$ is a well-defined function of $\mathrm{span}\,\hat V$ alone.
+**This holds in both forms**, with the same proof at $p=1$ and $p=\tfrac12$.
 
-*Proof.* $(Q^{\top}\hat EQ)^{-1/2}=Q^{\top}\hat E^{-1/2}Q$ for $\hat E=\hat V^{\top}\hat A^{2}\hat V$,
-so $\hat VQ(Q^{\top}\hat EQ)^{-1/2}Q^{\top}\hat V^{\top}=\hat V\hat E^{-1/2}\hat V^{\top}$;
-and $\hat VQQ^{\top}\hat V^{\top}=\hat V\hat V^{\top}=\Pi$. $\square$
+*Proof.* $(Q^{\top}\hat EQ)^{-p}=Q^{\top}\hat E^{-p}Q$, so
+$\hat VQ(Q^{\top}\hat EQ)^{-p}Q^{\top}\hat V^{\top}=\hat V\hat E^{-p}\hat V^{\top}$;
+and $\hat VQQ^{\top}\hat V^{\top}=\hat V\hat V^{\top}=\Pi$. Take
+$\hat E=\hat V^{\top}\hat A\hat V,\ p=1$ for $G_{\rm spd}$ and
+$\hat E=\hat V^{\top}\hat A^{2}\hat V,\ p=\tfrac12$ for $G_{\rm ind}$. $\square$
 
 **Orthonormality is not a formality here.** For a general change of basis $\hat V\mapsto\hat VR$,
 $R(R^{\top}\hat ER)^{-1/2}R^{\top}=\hat E^{-1/2}$ holds *iff* $R$ is orthogonal. Take
@@ -117,17 +132,23 @@ moves the span. The experiment separates the two exactly (`exp1`, iteration coun
 | | consistent regauge $(C\!\to\!CQ,\ \hat V\!\to\!Q^{\top}\hat V)$ | frozen $\hat V$, same $CQ$ |
 |---|---|---|
 | ILDL | 54 → **55** | 54 → **159** |
-| ichol | 10 → **10** | 10 → **30** |
+| ichol | 10 → **10** | 10 → **31** |
 
 The identity behind the first column is exact; the single ILDL iteration of difference is
 roundoff, since an integer iteration count is a discontinuous function of a residual norm.
 Thm 1.3 is therefore tested at the operator level as well —
 $\lVert G(\hat V)Z-G(\hat VQ)Z\rVert/\lVert Z\rVert$ against a tolerance of
-$10^{-12}\kappa(\hat E)$, where $\hat E=\hat V^{\top}\hat A^{2}\hat V$ is ill-conditioned by
-construction because $\hat A$ is squared. Measured $1.2\cdot10^{-13}$ at
-$\kappa(\hat E)=2.3\cdot10^{3}$ (ILDL) and $3.2\cdot10^{-5}$ at $\kappa(\hat E)=1.7\cdot10^{8}$
-(ichol) — the ichol figure is some three decades above $\varepsilon\kappa(\hat E)$, which is
-what forming $\hat E^{-1/2}$ on a squared operator costs.
+$10^{-12}\kappa(\hat E)$. Measured $1.2\cdot10^{-13}$ at $\kappa(\hat E)=2.3\cdot10^{3}$ (ILDL)
+and $8.5\cdot10^{-9}$ at $\kappa(\hat E)=1.3\cdot10^{4}$ (ichol).
+
+**The squaring is visible here, and it is expensive.** For ILDL, $\hat E=\hat V^{\top}\hat A^{2}\hat V$
+is ill-conditioned *by construction* — squaring squares the condition number — and the tolerance
+has to say so. The SPD family has no such obligation: with $\hat E=\hat V^{\top}\hat A\hat V$ the
+same measurement gives $\kappa(\hat E)=1.3\cdot10^{4}$ against $1.7\cdot10^{8}$ for the squared
+form on the same problem, and the invariance error falls from $3.2\cdot10^{-5}$ to
+$8.5\cdot10^{-9}$ — four decades of conditioning and nearly four of accuracy, recovered by not
+squaring an operator that was already definite. (`exp1`. The $3.2\cdot10^{-5}$ figure is what an
+earlier version of this study measured, when both families were run through $G_{\rm ind}$.)
 
 ---
 
@@ -184,10 +205,17 @@ right side is not, and §2.1 turns that into a theorem. Note the direction: this
 pencil subspaces of the *same* metric, so by Thm 1.2 the comparison transports to chart
 $n{+}1$, where both are invariant subspaces of symmetric matrices differing by
 $E=C_{n+1}^{-1}\,\Delta A\,C_{n+1}^{-\top}$. The $k$ smallest-$\lvert\lambda\rvert$ set is
-$\mathrm{spec}\cap[-\lvert\lambda_k\rvert,\lvert\lambda_k\rvert]$ — a *middle* spectral set,
-but a consecutive block in the **signed** order, so the applicable statement is the two-sided
-$\sin\Theta$ theorem (not the extremal one), whose separation is exactly
-$\gamma=\lvert\lambda_{k+1}\rvert-\lvert\lambda_k\rvert$. Reading $\gamma$ off the perturbed
+$\mathrm{spec}\cap[-\lvert\lambda_k\rvert,\lvert\lambda_k\rvert]$.
+
+**Which $\sin\Theta$ theorem applies depends on the family.** For the indefinite family that set
+straddles the origin: it is a *middle* spectral set — a consecutive block in the **signed** order,
+but not an extremal one — so the applicable statement is the two-sided $\sin\Theta$ theorem.
+For the SPD family $\hat A\succ0$, so the $k$ smallest $\lvert\lambda\rvert$ *are* the $k$
+smallest $\lambda$: an **extremal** set, and the ordinary one-sided Davis–Kahan applies. Either
+way the separation is the same number, $\gamma=\lvert\lambda_{k+1}\rvert-\lvert\lambda_k\rvert$,
+and so is the bound below; only the theorem being cited changes. (An earlier version of this
+document claimed the two-sided form for both columns, which is wrong for the SPD one — harmlessly,
+since the bound is identical, but it is the wrong reason.) Reading $\gamma$ off the perturbed
 operator $\hat A_{n+1}$ then costs Weyl's correction:
 
 ```math
@@ -268,7 +296,7 @@ zero. `exp3A` runs it with $\lVert M_2-M_1\rVert/\lVert M_1\rVert = 3.5\cdot10^{
 | | $\delta_{\rm metric}$ | $\delta_{\rm gauge}$ | its: reference \| frozen \| transported \| no coarse space |
 |---|---|---|---|
 | ILDL | $1.2\cdot10^{-11}$ | $1.000$ | 54 \| **161** \| 55 \| 146 |
-| ichol | $4.3\cdot10^{-15}$ | $1.000$ | 10 \| **29** \| 10 \| 29 |
+| ichol | $4.3\cdot10^{-15}$ | $1.000$ | 10 \| **30** \| 10 \| 29 |
 
 Nothing about the preconditioner changed. A frozen coarse space nonetheless costs 161
 iterations against 146 for **no coarse space at all**, and transport restores the reference
@@ -426,74 +454,124 @@ discontinuous, just with small jumps.
 
 ## 4. What a wrong subspace costs
 
-The operator MINRES actually sees is $G\hat A$, **not** $G\hat AG$. MATLAB's `minres` takes
-its fifth argument as the preconditioner $M$ and applies $M^{-1}$; a function handle there
-*is* the apply of $M^{-1}$, and `two_level_split_solve` passes the handle that applies $G$.
-The distinction is not cosmetic: on an exactly captured mode $G\hat A$ has eigenvalue
-$\sqrt{\tau}\,\mathrm{sign}\,\lambda$ — the textbook deflation target, and the reason
-$\tau=0.5$ is a sensible $O(1)$ choice — whereas $G\hat AG$ would give $\tau/\lambda$, which
-blows up on precisely the modes being deflated. (Pinned by `test_kernel` T16–T18; see also
-the note in §7.)
+The operator the Krylov method actually sees is $G\hat A$, **not** $G\hat AG$. MATLAB's `minres`
+and `pcg` take their fifth argument as the preconditioner $M$ and apply $M^{-1}$; a function
+handle there *is* the apply of $M^{-1}$, and `two_level_solve_local` passes the handle that
+applies $G$. The distinction is not cosmetic: on an exactly captured mode $G\hat A$ has
+eigenvalue $\sqrt{\tau}\,\mathrm{sign}\,\lambda$ (indefinite) or $\tau$ (SPD) — the textbook
+deflation target, and the reason $\tau=0.5$ is a sensible $O(1)$ choice — whereas $G\hat AG$
+would give $\tau/\lambda$, which blows up on precisely the modes being deflated. (Pinned by
+`test_kernel` T16–T20; see also the note in §7.)
 
-**Theorem 4.1 (closed form).** Let $\hat A=\mathrm{diag}(\lambda_1,\lambda_2)$ and let the
-coarse space be one-dimensional at angle $\theta$ from the target. With $c=\cos\theta$,
-$s=\sin\theta$, and assuming $E>0$,
-
-```math
-E=\lambda_1^{2}c^{2}+\lambda_2^{2}s^{2},\quad
-\beta=\sqrt{\tau/E},\quad
-\alpha=\lambda_1c^{2}+\lambda_2s^{2},
-```
-
-the two eigenvalues of $G\hat A$ are the roots of
+**Theorem 4.1 (closed form, both families).** Let $\hat A=\mathrm{diag}(\lambda_1,\lambda_2)$ and
+let the coarse space be one-dimensional at angle $\theta$ from the target, $c=\cos\theta$,
+$s=\sin\theta$. Writing $G=I+(\beta-1)vv^{\top}$, the two eigenvalues of $G\hat A$ are the roots of
 
 ```math
-\mu^{2}-\bigl[\lambda_1+\lambda_2+(\beta-1)\alpha\bigr]\mu+\beta\lambda_1\lambda_2=0 .
+\mu^{2}-\mathrm{tr}\,\mu+\beta\lambda_1\lambda_2=0 ,
 ```
 
-They are real, because $G$ is SPD and so $G\hat A$ is similar to the symmetric
-$G^{1/2}\hat AG^{1/2}$. At $\theta=0$ they are $\{\sqrt{\tau}\,\mathrm{sign}\,\lambda_1,\ \lambda_2\}$.
-(Derivation in A.3.) Verified against the assembled operator to $1.3\cdot10^{-15}$ over the
-whole sweep.
+with the two families differing only in what the coarse matrix is built from:
 
-**Corollary 4.2 (the tolerance on the coarse space).** $E$ stops being $\lambda_1^2$-dominated
-once $\tan\theta$ exceeds $\lvert\lambda_1/\lambda_2\rvert$, after which
-$\beta\approx\sqrt{\tau}/(\lvert\lambda_2\rvert s)$ and the small eigenvalue decays like
-$\sqrt{\tau}\lambda_1/(s\lambda_2)$. The usable angle is therefore
-$O(\lvert\lambda_1/\lambda_2\rvert)$ — proportional to the very ratio that made deflation
-worth doing. Setting that estimate equal to $\sqrt\tau/2$ puts the **half-loss** angle at
-$s=2\lvert\lambda_1/\lambda_2\rvert=2\cdot10^{-2}$, against a measured $1.81\cdot10^{-2}$.
-(The often-quoted $\arctan\lvert\lambda_1/\lambda_2\rvert=10^{-2}$ is the *crossover* angle
-where $E$ changes character, which is a factor 2 lower.)
+| | $E$ | $\beta$ | $\mathrm{tr}$ | at $\theta=0$ |
+|---|---|---|---|---|
+| indefinite | $\lambda_1^{2}c^{2}+\lambda_2^{2}s^{2}$ | $\sqrt{\tau/E}$ | $\lambda_1+\lambda_2+(\beta-1)\alpha$, $\;\alpha=\lambda_1c^{2}+\lambda_2s^{2}$ | $\{\sqrt{\tau}\,\mathrm{sign}\,\lambda_1,\ \lambda_2\}$ |
+| SPD | $\lambda_1c^{2}+\lambda_2s^{2}$ | $\tau/E$ | $\lambda_1+\lambda_2+\tau-E$ $\;(\alpha=E$ here$)$ | $\{\tau,\ \lambda_2\}$ |
+
+The roots are real, because $G$ is SPD and so $G\hat A$ is similar to the symmetric
+$G^{1/2}\hat AG^{1/2}$. (Derivation in A.3.) Verified against the assembled operator over the
+whole sweep to $1.3\cdot10^{-15}$ (indefinite) and $8.9\cdot10^{-16}$ (SPD).
+
+**Remark 4.1a (the two forms agree on an invariant subspace).** If $\mathrm{span}\,\hat V$ is
+invariant with $\hat A\hat V=\hat V\Lambda$, $\Lambda\succ0$, then
+$(\hat V^{\top}\hat A^{2}\hat V)^{-1/2}=\lvert\Lambda\rvert^{-1}=\Lambda^{-1}=(\hat V^{\top}\hat A\hat V)^{-1}$,
+so $G_{\rm ind}(\tau)=G_{\rm spd}(\sqrt{\tau})$ **exactly**. Running an SPD problem through the
+indefinite form is therefore not an error at $\theta=0$ — it is a reparametrisation of $\tau$.
+The two part company off invariance, which is the entire subject of this study. (Pinned to
+round-off by `test_kernel` T22.)
+
+**Corollary 4.2 (the tolerance on the coarse space, and how it differs).** $E$ stops being
+$\lambda_1$-dominated when the $s^{2}$ term overtakes the $c^{2}$ term. Reading that off the
+table above:
+
+```math
+\text{indefinite: }\ \tan\theta>\lvert\lambda_1/\lambda_2\rvert,
+\qquad
+\text{SPD: }\ \tan^{2}\theta>\lambda_1/\lambda_2 .
+```
+
+**The usable angle is $O(\lvert\lambda_1/\lambda_2\rvert)$ for the indefinite form and
+$O(\sqrt{\lambda_1/\lambda_2})$ — its square root, hence far larger — for the SPD one.** Past the
+crossover the indefinite $\beta\approx\sqrt{\tau}/(\lvert\lambda_2\rvert s)$ and the small
+eigenvalue decays like $\sqrt{\tau}\lambda_1/(s\lambda_2)$. At the study's
+$\lambda_1/\lambda_2=10^{-2}$ the measured half-loss angles are $1.81\cdot10^{-2}$ (indefinite,
+predicted onset $10^{-2}$) and $9.19\cdot10^{-2}$ (SPD, predicted onset $9.97\cdot10^{-2}$).
+
+### 4.1 What the squaring costs
+
+Cor 4.2 is a claim about scaling, so it is tested as a slope. Sweep $\lambda_1/\lambda_2$ over
+five decades and fit the half-loss angle:
+
+| $\lambda_1/\lambda_2$ | $10^{-6}$ | $10^{-5}$ | $10^{-4}$ | $10^{-3}$ | $10^{-2}$ | $10^{-1}$ |
+|---|---|---|---|---|---|---|
+| indefinite | $1.75\cdot10^{-6}$ | $1.73\cdot10^{-5}$ | $1.74\cdot10^{-4}$ | $1.74\cdot10^{-3}$ | $1.70\cdot10^{-2}$ | $1.56\cdot10^{-1}$ |
+| SPD | $7.79\cdot10^{-4}$ | $2.47\cdot10^{-3}$ | $7.80\cdot10^{-3}$ | $2.47\cdot10^{-2}$ | $7.88\cdot10^{-2}$ | $2.82\cdot10^{-1}$ |
+| ratio | 446 | 142 | 45 | 14 | 4.6 | 1.8 |
+
+Log-log slopes **0.9921** (indefinite, predicted $1$) and **0.5089** (SPD, predicted $\tfrac12$).
+(The $10^{-2}$ column reads $1.70\cdot10^{-2}$ and $7.88\cdot10^{-2}$ against the
+$1.81\cdot10^{-2}$ and $9.19\cdot10^{-2}$ quoted under Cor 4.2: same quantity, resolved on the
+2000-point grid this sweep uses rather than the 60-point grid of the main sweep. A half-loss
+angle is a threshold crossing, so it is only ever located to the grid.)
+The prediction is confirmed to two digits over five decades, and the practical reading is the
+ratio row: the harder the problem — the smaller $\lambda_1/\lambda_2$, which is exactly when
+deflation is worth doing — the more the squaring costs, growing like
+$(\lambda_1/\lambda_2)^{-1/2}$.
+
+This is the honest statement of what §1's "the squaring is expensive" means. Squaring is
+*necessary* for the indefinite family: $\hat V^{\top}\hat A\hat V$ has no definite sign there and
+the coarse solve simply breaks. It is *avoidable* for the SPD family, and until this revision
+the SPD column of this document was paying for it anyway. (`exp6A`, `exp6A2`.)
 
 ![Cost versus angle](figures/cost_vs_angle.png)
 
-*Left: the $2\times2$ model. The smallest $\lvert\mu\rvert$ holds at $\sqrt{\tau}$ until
-$\theta$ reaches $\arctan\lvert\lambda_1/\lambda_2\rvert$ (dotted), then decays back to the
-undeflated $\lvert\lambda_1\rvert$. Right: the real KKT matrix with its own ILDL chart, exact
-coarse space rotated by $\theta$. 53 iterations at $\theta=0$, 142 with no coarse space, and
-the two curves cross near $\theta\approx0.5$.* (`exp6`.)
+*Top left: the $2\times2$ model, both forms. The smallest $\lvert\mu\rvert$ holds at its plateau
+($\sqrt{\tau}$ indefinite, $\tau$ SPD) until $\theta$ reaches the respective onset (dotted), then
+decays back to the undeflated $\lvert\lambda_1\rvert$; the SPD curve holds a decade longer. Top
+right: the half-loss angle over five decades, against the reference slopes $\lambda_1/\lambda_2$
+and $\sqrt{\lambda_1/\lambda_2}$. Bottom: the real systems with their own charts and their own
+solvers, exact coarse space rotated by $\theta$ — the KKT matrix with ILDL and MINRES (53 its at
+$\theta=0$, 142 with no coarse space, curves crossing near $\theta\approx0.5$), and the
+kernel-ridge matrix with ichol and PCG (10, 29, no crossing).* (`exp6`.)
 
-**Observation 4.3 (worse than nothing).** $G$ replaces the identity on
-$\mathrm{span}\,\hat V$ by $\sqrt{\tau}(\hat V^{\top}\hat A^{2}\hat V)^{-1/2}$. When that
-span is not near-invariant, the substitution appears to damage directions that were fine
-instead of repairing ones that were not, and the coarse space costs more than it saves.
-Measured three independent ways: in the sweep above (149 against 142 at $\theta\approx0.53$);
-in the controlled regauge of Prop 2.4 (161 against 146); and at **every step** of the real
-sequence in §5 below (201/156/172/193 frozen, against 174/149/165/179 with no coarse space
-at all).
+**Observation 4.3 (worse than nothing — and only in the indefinite family).** $G$ replaces the
+identity on $\mathrm{span}\,\hat V$ by a coarse solve. When that span is not near-invariant, the
+substitution appears to damage directions that were fine instead of repairing ones that were not,
+and the coarse space costs more than it saves. Measured three independent ways under ILDL: in the
+sweep above (149 against 142 at $\theta\approx0.53$); in the controlled regauge of Prop 2.4 (161
+against 146); and at **every step** of the real sequence in §5 below (201/156/172/193 frozen,
+against 174/149/165/179 with no coarse space at all).
 
-**§4's own model does not predict this, and that gap is unresolved.** At $\theta\to\pi/2$
-Thm 4.1 gives $\mathrm{spec}(G\hat A)=\{\lambda_1,\ \sqrt{\tau}\,\mathrm{sign}\,\lambda_2\}$
+**Under ichol with the SPD form it does not happen at all.** Across the same $\theta$ sweep the
+worst count is 29, exactly the no-coarse-space baseline, and never above it — the coarse space
+degrades to useless but never to harmful. That asymmetry is now asserted in both directions, so
+either behaviour appearing in the other column fails the harness loudly (`exp6B`).
+
+**§4's own model does not predict the indefinite excess, and that gap is unresolved.** At
+$\theta\to\pi/2$ Thm 4.1 gives $\mathrm{spec}(G\hat A)=\{\lambda_1,\ \sqrt{\tau}\,\mathrm{sign}\,\lambda_2\}$
 against the undeflated $\{\lambda_1,\lambda_2\}$ — with $\tau=0.5$ a *narrower* spread
 ($\kappa=70.7$ versus $100$, confirmed in `output/exp6_model.csv`). The $2\times2$ model
 therefore says a maximally misaligned coarse space is no worse than none, while the real
-KKT matrix measures 153 against 142. Whatever produces the excess lives in the redistribution
-of the *interior* of an indefinite spectrum — the two-interval structure that
-`deflated_spectrum>minres_rate` computes and that §4 never analyses.
+KKT matrix measures 153 against 142. The SPD measurement is direct evidence for the explanation
+this section already offered: whatever produces the excess lives in the redistribution of the
+*interior* of an **indefinite** spectrum — the two-interval structure that
+`deflated_spectrum>minres_rate` computes and that §4 never analyses — and the SPD spectrum, having
+no such interior, shows no excess. Evidence, not proof: the two columns also differ in problem,
+in conditioning and in Krylov method.
 
 The failure mode is, in any case, *not* hypersensitivity to a small angle — degradation with
-$\theta$ is gradual. It is that a refreshed factor drives $\theta$ straight to $\pi/2$.
+$\theta$ is gradual in both families. It is that a refreshed factor drives $\theta$ straight to
+$\pi/2$.
 
 ---
 
@@ -581,20 +659,29 @@ metric-independent.
 
 ## 6. Side by side
 
-Read this table with §2's caveat in hand: the two columns are different problems perturbed
-by amounts four decades apart, so only the $\delta_{\rm chart}$ row — a slope, measured at
-matched $\lVert\Delta A\rVert$ — is a controlled comparison.
+Read this table with §2's caveat in hand, and with one more. The two columns are different
+problems perturbed by amounts four decades apart, so only the $\delta_{\rm chart}$ row — a slope,
+measured at matched $\lVert\Delta A\rVert$ — is a controlled comparison. **And the last four
+rows are now also form-dependent**: since this revision the SPD column runs $G_{\rm spd}$ under
+PCG and the indefinite column $G_{\rm ind}$ under MINRES, each its own production path, so
+iteration counts do not compare across the columns at all. Rows marked † depend on the coarse
+correction; the rest are properties of $C_n$, $M_n$ and the pencil alone and would read the same
+under either form.
 
 | term | SPD, ichol | symmetric indefinite, ILDL | related result |
 |---|---|---|---|
+| coarse correction | $G_{\rm spd}$ on $\hat A$, PCG | $G_{\rm ind}$ on $\hat A^{2}$, MINRES | §1, §4 |
 | $\delta_{\rm chart}$, matched $\lVert\Delta A\rVert$ | $O(\lVert\Delta A\rVert)$; slope $1.00$ | $\Theta(1)$; slope $0.00$, pinned at $1$ | Thm 3.1 vs Thm 3.2 + Obs 3.4 |
 | — under a pure regauge | $\Theta(1)$ | $\Theta(1)$ | Prop 2.4 |
 | — under a value-only step | $O(\lVert\Delta A\rVert)$ | $O(\lVert\Delta A\rVert)$; slope $0.96$ | Obs 3.4 |
 | — removable by transport? | yes, exactly | yes, exactly | Thm 5.1 |
 | $\delta_{\rm prec}$ | $d_F\le1.0\cdot10^{-2}$ | $d_F\approx0.38\!-\!0.43$ | — (see below) |
-| $\delta_{\rm op}$ | $d_F\le1.2\cdot10^{-2}$; DK applicable at 2 of 4 pairs | $d_F\approx0.38\!-\!0.46$; rank $\Delta A = 2n_C$; DK **inapplicable** | Thm 2.3 |
-| cost of freezing | 11 vs 10 its (harmless) | 201 vs 60 its, worse than no coarse space | Obs 4.3 |
-| cost after transport | 11 its | 149 its | Thm 5.1 |
+| $\delta_{\rm op}$ | $d_F\le1.2\cdot10^{-2}$; DK applicable at 2 of 4 pairs, **extremal** form | $d_F\approx0.38\!-\!0.46$; rank $\Delta A = 2n_C$; DK **inapplicable**, two-sided form | Thm 2.3 |
+| † usable coarse-space angle | $O(\sqrt{\lambda_1/\lambda_2})$; slope $0.51$ | $O(\lambda_1/\lambda_2)$; slope $0.99$ | Cor 4.2, §4.1 |
+| † $\kappa(\hat E)$ | $1.3\cdot10^{4}$ | $2.3\cdot10^{3}$ (squared by construction) | Thm 1.3 |
+| † can deflation be worse than none? | **no** (worst 29 = baseline 29) | yes (153 vs 142; 201 vs 174) | Obs 4.3 |
+| † cost of freezing | 11 vs 10 its (harmless) | 201 vs 60 its, worse than no coarse space | Obs 4.3 |
+| † cost after transport | 11 its | 149 its | Thm 5.1 |
 
 No result in this document bounds $\delta_{\rm prec}$. Prop 5.3 is the nearest thing, and it
 does not apply as stated: it bounds $d(\mathcal U_k(A,M),\mathcal N_k(A))$ in the **Euclidean**
@@ -617,13 +704,27 @@ everything the operator does.
 
 1. `stokes_immersed_rotor/README.md` §7 states the coarse correction as
    $(I-\hat V\hat V^{\top})+\tau\,\hat V\lvert\hat E\rvert^{-1}\hat V^{\top}$ with
-   $\hat E=\hat V^{\top}\hat A\hat V$. The code path actually run
-   (`deflation_Psqrt_apply` via `two_level_split_solve`) is the square-root form on the
-   **squared** operator, $G=(I-\Pi)+\sqrt{\tau}\hat V(\hat V^{\top}\hat A^{2}\hat V)^{-1/2}\hat V^{\top}$.
-2. Because MINRES applies the fifth argument as $M^{-1}$, the preconditioned operator is
-   $G\hat A$, whose captured eigenvalues are $\pm\sqrt{\tau}$. Reading it as $G\hat AG$ (the
-   composition one writes by reflex for a split preconditioner) gives $\tau/\lambda$ and
-   predicts, wrongly, that the scheme amplifies exactly the modes it deflates.
+   $\hat E=\hat V^{\top}\hat A\hat V$. That is a **retired** $\lvert\hat E\rvert^{-1}$ form; the
+   indefinite code path actually run (`deflation_Psqrt_apply` via `two_level_split_solve`) is the
+   square-root form on the **squared** operator,
+   $G_{\rm ind}=(I-\Pi)+\sqrt{\tau}\hat V(\hat V^{\top}\hat A^{2}\hat V)^{-1/2}\hat V^{\top}$.
+   This is correct **for the indefinite family only.** An SPD system takes the direct form
+   $G_{\rm spd}=(I-\Pi)+\tau\hat V(\hat V^{\top}\hat A\hat V)^{-1}\hat V^{\top}$ built on $\hat A$
+   itself, which is what `deflation_P_apply` implements and what the SPD reference path
+   (`ball_surface`, `+src/+solver/solve_deflate_M_P.m`) has always run.
+2. Because MINRES and PCG apply the fifth argument as $M^{-1}$, the preconditioned operator is
+   $G\hat A$, whose captured eigenvalues are $\pm\sqrt{\tau}$ (indefinite) or $\tau$ (SPD).
+   Reading it as $G\hat AG$ (the composition one writes by reflex for a split preconditioner)
+   gives $\tau/\lambda$ and predicts, wrongly, that the scheme amplifies exactly the modes it
+   deflates.
+3. **A correction to earlier versions of *this* document.** Until this revision both families
+   here were run through $G_{\rm ind}$, so the `ichol` column reported an SPD problem solved with
+   the indefinite coarse correction. By Remark 4.1a that is a reparametrisation rather than an
+   error wherever the coarse space is exactly invariant, which is why §2, §3 and §5 are unaffected
+   — every verdict in `exp2`, `exp4`, `exp5`, `exp7` and `exp8` is numerically unchanged. What it
+   did distort is §1's conditioning figure (the ichol $\kappa(\hat E)$ was $1.7\cdot10^{8}$ rather
+   than $1.3\cdot10^{4}$) and §4's tolerance analysis, which had only the indefinite crossover in
+   it. Both are now stated per family.
 
 ---
 
@@ -633,16 +734,17 @@ everything the operator does.
 coordinate_drift/
 ├── README.md                      this document
 ├── kernel/                        gap, gap_M, pencil_subspace, gauge_split,
-│                                  deflated_spectrum, make_case, chart_struct,
-│                                  save_figure, vrec, add_paths
+│                                  deflated_spectrum, coarse_correction,
+│                                  two_level_solve_local, make_case,
+│                                  chart_struct, save_figure, vrec, add_paths
 ├── experiments/                   exp1 .. exp8, run_all
-├── tests/test_kernel.m            19 unit checks on the primitives
+├── tests/test_kernel.m            24 unit checks on the primitives
 ├── figures/                       committed; embedded above
 └── output/                        verdicts.csv + per-experiment csv (gitignored)
 ```
 
 ```matlab
-cd tests;        test_kernel        % 19 checks, ~5 s -- run this first
+cd tests;        test_kernel        % 24 checks, ~5 s -- run this first
 cd ../experiments
 run_all                             % ~40 s, writes output/verdicts.csv + figures/
 run_all(struct('FULL', true))       % benchmark scale; conclusions unchanged
@@ -651,9 +753,13 @@ run_all(struct('FULL', true))       % benchmark scale; conclusions unchanged
 `kernel/make_case.m` is the load-bearing design choice: **one interface, two families**, so
 every experiment runs the identical code path for `ildl` (the immersed-rotor KKT sequence
 with `make_ildl_precond`) and `ichol` (a sparsified RBF kernel-ridge system from
-`GP_train/pumadyn32nm` with a fixed-pattern `ichol`). Only $(A_n,C_n)$ differs between the
-two columns of every table above — which, as §2 records, also means the two columns differ in
-problem and in step size, and only the matched-perturbation slope of §3 controls for that.
+`GP_train/pumadyn32nm` with a fixed-pattern `ichol`). What differs between the two columns is
+$(A_n,C_n)$ **and the coarse correction each family requires** — `cs.defl_kind`, dispatched by
+`kernel/coarse_correction.m` and `kernel/two_level_solve_local.m`. Carrying that in the case
+struct rather than at each call site is what keeps the choice from being made by accident; it
+was made by accident, uniformly in favour of the indefinite form, until the revision recorded in
+§7.3. As §2 records, the two columns also differ in problem and in step size, and only the
+matched-perturbation slope of §3 controls for that.
 Fast-mode settings: $n=760$ (`bar_rotating`, $h_0=0.15$) and $n=600$, $k=50$, $\tau=0.5$,
 four step pairs. Nothing outside this directory is written to; `+src/`, the benchmark and
 `GP_train/` are read-only evidence.
@@ -687,16 +793,30 @@ the displayed inequality is then the triangle inequality applied to
 $\mathrm{span}\,\hat V_n$, $\mathcal W=\tilde T\,\mathrm{span}\,\hat V_n$ and
 $T\,\mathrm{span}\,\hat V_n=Q^{\top}\mathcal W$.
 
-**A.3 — Thm 4.1.** With $v$ a unit vector, $G=I+(\beta-1)vv^{\top}$ and $\beta=\sqrt{\tau/E}$,
-$E=v^{\top}\hat A^{2}v$. The eigenvalues of $G$ are $\beta$ (along $v$) and $1$, so
+**A.3 — Thm 4.1.** With $v$ a unit vector, $G=I+(\beta-1)vv^{\top}$ in **both** forms; only the
+scalar $\beta$ differs. The eigenvalues of $G$ are $\beta$ (along $v$) and $1$, so
 $\det G=\beta$ and $\det(G\hat A)=\beta\lambda_1\lambda_2$, while
 $\mathrm{tr}(G\hat A)=\mathrm{tr}\,\hat A+(\beta-1)v^{\top}\hat Av
-=\lambda_1+\lambda_2+(\beta-1)\alpha$. The eigenvalues of a $2\times2$ matrix are the roots of
-$\mu^{2}-(\mathrm{tr})\mu+\det$, which gives the quadratic. At $\theta=0$: $E=\lambda_1^{2}$,
+=\lambda_1+\lambda_2+(\beta-1)\alpha$ with $\alpha=v^{\top}\hat Av=\lambda_1c^{2}+\lambda_2s^{2}$.
+The eigenvalues of a $2\times2$ matrix are the roots of $\mu^{2}-(\mathrm{tr})\mu+\det$, which
+gives the quadratic. This much is common to the two families; they differ only in $\beta$.
+
+*Indefinite.* $\beta=\sqrt{\tau/E}$ with $E=v^{\top}\hat A^{2}v=\lambda_1^{2}c^{2}+\lambda_2^{2}s^{2}$,
+which is a different quantity from $\alpha$. At $\theta=0$: $E=\lambda_1^{2}$,
 $\beta=\sqrt{\tau}/\lvert\lambda_1\rvert$, $\alpha=\lambda_1$, so
 $\mathrm{tr}=\beta\lambda_1+\lambda_2$ and $\det=(\beta\lambda_1)\lambda_2$, and the quadratic
 factors as $(\mu-\lambda_2)(\mu-\beta\lambda_1)$ with
 $\beta\lambda_1=\sqrt{\tau}\,\mathrm{sign}\,\lambda_1$.
+
+*SPD.* $\beta=\tau/E$ with $E=v^{\top}\hat Av$ — which **is** $\alpha$, since the coarse matrix is
+now built from $\hat A$ itself rather than its square. Hence $(\beta-1)\alpha=\beta E-E=\tau-E$
+and $\mathrm{tr}=\lambda_1+\lambda_2+\tau-E$, with no $\beta$ left in it. At $\theta=0$:
+$E=\lambda_1$, $\beta=\tau/\lambda_1$, so $\mathrm{tr}=\tau+\lambda_2$ and
+$\det=\tau\lambda_2$, factoring as $(\mu-\lambda_2)(\mu-\tau)$.
+
+The collapse $\alpha=E$ in the SPD case is the algebraic root of Cor 4.2's difference: the
+contaminating direction enters $E$ weighted by $\lambda_2$ in the SPD form and by $\lambda_2^{2}$
+in the indefinite one, and it is that extra power that halves the exponent of the usable angle.
 
 **A.4 — Prop 5.3.** Let $u_1,\dots,u_k$ be $M$-orthonormal pencil eigenvectors with eigenvalues
 $\lambda_1,\dots,\lambda_k$ ordered so that $\max_i\lvert\lambda_i\rvert=\lvert\lambda_k\rvert$,

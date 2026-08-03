@@ -62,35 +62,41 @@ function V = exp1_chart_and_invariance(opts)
         b   = ones(n, 1);
         Vb  = orth_trunc(Vh);
         Qk  = orth(randn(size(Vb, 2)));
-        Ah2 = @(z) Ahat(Ahat(z));
-        [Pd1, E1] = src.precond.deflation_Psqrt_apply(Vb,      Ah2, 0.5, 'handle');
-        Pd2       = src.precond.deflation_Psqrt_apply(Vb * Qk, Ah2, 0.5, 'handle');
+        % Each family gets ITS OWN coarse correction: the SPD form P built on
+        % Ahat for 'ichol', the square-root form built on Ahat^2 for 'ildl'.
+        [Pd1, E1] = coarse_correction(Vb,      Ahat, cs.tau, cs.defl_kind, 'handle');
+        Pd2       = coarse_correction(Vb * Qk, Ahat, cs.tau, cs.defl_kind, 'handle');
         Z   = randn(n, 8);
         opdiff = norm(Pd1(Z) - Pd2(Z), 2) / norm(Z, 2);
-        % The identity is exact; what is achievable numerically is limited by
-        % the coarse matrix E = V'Ahat^2 V, whose inverse square root is formed
-        % by eig.  Ahat^2 squares the condition number, so E is badly
-        % conditioned by construction and the tolerance must say so.
+        % The identity is exact; what is achievable numerically is limited by the
+        % coarse matrix E, whose inverse (spd) or inverse square root (indef) is
+        % formed by chol / eig.  For 'indef' E = V'Ahat^2 V is badly conditioned
+        % BY CONSTRUCTION -- squaring squares the condition number -- and the
+        % tolerance must say so.  For 'spd' E = V'Ahat V is not squared, so the
+        % same tolerance rule buys far more room; the two cond(E) values below
+        % are the price of the squaring, measured.
         cE  = cond(E1);
         tolI = 1e-12 * max(1, cE);
-        V = [V, vrec(['exp1/' f], 'Thm 1.3 P^{1/2} depends on span(V) only', ...
+        V = [V, vrec(['exp1/' f], ...
+                     sprintf('Thm 1.3 %s coarse correction depends on span(V) only', ...
+                             cs.defl_kind), ...
                      '||P(V)Z - P(VQ)Z||/||Z||  (cond E)', ...
                      sprintf('%.3g  (%.2g)', opdiff, cE), ...
                      '< 1e-12 cond(E)', opdiff < tolI)]; %#ok<AGROW>
 
-        [~, ~, ~, it_V]  = src.precond.two_level_split_solve(cs.A, b, tol, mit, cs, Vb,      0.5);
-        [~, ~, ~, it_VQ] = src.precond.two_level_split_solve(cs.A, b, tol, mit, cs, Vb * Qk, 0.5);
+        [~, ~, ~, it_V]  = two_level_solve_local(cs.A, b, tol, mit, cs, Vb,      cs.tau);
+        [~, ~, ~, it_VQ] = two_level_solve_local(cs.A, b, tol, mit, cs, Vb * Qk, cs.tau);
         V = [V, vrec(['exp1/' f], 'Thm 1.3 iteration count follows', ...
                      'its(V) vs its(V*Q)', sprintf('%d vs %d', it_V, it_VQ), ...
                      'within 1', abs(it_V - it_VQ) <= 1)]; %#ok<AGROW>
 
         % ---- Thm 1.4: gauge covariance vs the frozen-basis bug ---------------
         Qn  = orth(randn(n));
-        Pg  = chart_struct(cs.C * Qn);              % same M, different factor
-        [~, ~, ~, it_cons] = src.precond.two_level_split_solve( ...
-                                 cs.A, b, tol, mit, Pg, orth_trunc(Qn' * Vb), 0.5);
-        [~, ~, ~, it_froz] = src.precond.two_level_split_solve( ...
-                                 cs.A, b, tol, mit, Pg, Vb, 0.5);
+        Pg  = chart_struct(cs.C * Qn, cs.defl_kind, cs.tau);   % same M, other factor
+        [~, ~, ~, it_cons] = two_level_solve_local( ...
+                                 cs.A, b, tol, mit, Pg, orth_trunc(Qn' * Vb), cs.tau);
+        [~, ~, ~, it_froz] = two_level_solve_local( ...
+                                 cs.A, b, tol, mit, Pg, Vb, cs.tau);
         V = [V, vrec(['exp1/' f], 'Thm 1.4 consistent regauge changes nothing', ...
                      'its(C,V) vs its(CQ, Q''V)', sprintf('%d vs %d', it_V, it_cons), ...
                      'within 1', abs(it_V - it_cons) <= 1)]; %#ok<AGROW>

@@ -45,17 +45,17 @@ function [V, D] = exp3_regauge_only(opts)
 
         Q   = orth(randn(n));
         C2  = cs.C * Q;
-        P2  = chart_struct(C2);
+        P2  = chart_struct(C2, cs.defl_kind, cs.tau);
         M2  = C2 * C2';
         dM  = norm(full(M2 - cs.M), 2) / norm(full(cs.M), 2);
 
         gs  = gauge_split(cs.C, C2, Vb);
         Vtr = orth_trunc(C2' * (cs.applyCtinv(Vb)));      % transported
 
-        [~, ~, ~, it_ref] = src.precond.two_level_split_solve(cs.A, b, tol, mit, cs, Vb,  0.5);
-        [~, ~, ~, it_frz] = src.precond.two_level_split_solve(cs.A, b, tol, mit, P2, Vb,  0.5);
-        [~, ~, ~, it_trp] = src.precond.two_level_split_solve(cs.A, b, tol, mit, P2, Vtr, 0.5);
-        [~, ~, ~, it_non] = src.precond.two_level_split_solve(cs.A, b, tol, mit, P2, [],  0.5);
+        [~, ~, ~, it_ref] = two_level_solve_local(cs.A, b, tol, mit, cs, Vb,  cs.tau);
+        [~, ~, ~, it_frz] = two_level_solve_local(cs.A, b, tol, mit, P2, Vb,  cs.tau);
+        [~, ~, ~, it_trp] = two_level_solve_local(cs.A, b, tol, mit, P2, Vtr, cs.tau);
+        [~, ~, ~, it_non] = two_level_solve_local(cs.A, b, tol, mit, P2, [],  cs.tau);
 
         D.(f).pure = struct('n', n, 'dM', dM, 'delta_chart', gs.delta_chart, ...
                             'delta_metric', gs.delta_metric, 'delta_gauge', gs.delta_gauge, ...

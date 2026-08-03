@@ -124,6 +124,63 @@ dpos = logspace(-2, 1, 12)';
 [~, ~, ~, it1] = minres(diag(dpos), ones(12,1), 1e-12, 30, diag(dpos));
 [np, nf] = chk(np, nf, 'T18 minres 5th argument is M, applied as M^{-1}', it1 == 1);
 
+%% ------------------------------------ the SPD coarse correction (T19-T23) ----
+% An SPD system does NOT need the squared operator: E = V'Ahat V is already
+% positive definite, so the direct form P = (I-VV') + tau V E^{-1} V' applies.
+% These five checks pin the SPD branch, and T22 pins the exact sense in which
+% the two forms agree -- which is why the study's earlier ichol numbers, taken
+% with the indefinite form, were a reparametrization rather than an error.
+lams = [0.02; 0.05; 0.4; 1.0; 2.0];                % SPD spectrum
+Qs   = orth(randn(5));  As = Qs*diag(lams)*Qs';  As = (As+As')/2;
+[Vs_, Ds_] = eig(As);  [~, os] = sort(diag(Ds_));  Vsp = Vs_(:, os(1:2));
+os1 = deflated_spectrum(As, Vsp, tau, 'spd');
+
+% T19  exact invariant V, SPD form: the captured modes move to tau itself.
+%      Contrast T16, where the indefinite form sends them to sqrt(tau)*sign.
+pred_spd = sort([tau; tau; lams(os(3:end))]);
+[np, nf] = chk(np, nf, 'T19 SPD exact V: coarse eigenvalues -> tau', ...
+    norm(sort(os1.lam) - pred_spd, inf) < 1e-9);
+
+% T20  the reported SPD spectrum really is that of P*Ahat.
+[np, nf] = chk(np, nf, 'T20 SPD reported spectrum equals eig(P*Ahat)', ...
+    norm(sort(real(eig(os1.G * As))) - os1.lam, inf) < 1e-9);
+
+% T21  basis invariance of the SPD form (Thm 1.3, the p = 1 case).  The
+%      tolerance scales with cond(E) exactly as in the indefinite case -- but E
+%      is no longer squared, so it is a far smaller number and this passes with
+%      correspondingly more room.
+Vrot = Vsp * orth(randn(2));
+[P1, E1s] = src.precond.deflation_P_apply(Vsp,  As, tau, 'handle');
+ P2s      = src.precond.deflation_P_apply(Vrot, As, tau, 'handle');
+Zt = randn(5, 4);
+opdiff_spd = norm(P1(Zt) - P2s(Zt), 2) / norm(Zt, 2);
+[np, nf] = chk(np, nf, 'T21 SPD P depends on span(V) only  [Thm 1.3]', ...
+    opdiff_spd < 1e-12 * max(1, cond(E1s)));
+
+% T22  THE EQUIVALENCE.  On an exactly invariant span(V) with SPD Ahat,
+%      (V'Ahat^2 V)^{-1/2} = |L|^{-1} = (V'Ahat V)^{-1}, so the two forms are the
+%      same operator up to tau <-> sqrt(tau).  This is what makes "the ichol
+%      family was run with the indefinite form" a reparametrization at theta = 0
+%      -- and, by exp6, a genuine difference away from it.
+Pa = src.precond.deflation_P_apply(Vsp,     As,    sqrt(tau), 'matrix');
+Pb = src.precond.deflation_Psqrt_apply(Vsp, As*As, tau,       'matrix');
+[np, nf] = chk(np, nf, 'T22 SPD forms agree on invariant V when tau -> sqrt(tau)', ...
+    norm(Pa - Pb, 'fro') / norm(Pa, 'fro') < 1e-12);
+
+% T23  REGRESSION GUARD.  two_level_solve_local('indef') must reproduce the
+%      production src.precond.two_level_split_solve iteration for iteration; the
+%      refactor is only allowed to add the SPD branch, not to move the old one.
+Ki  = randn(n);  Ki = (Ki + Ki')/2;                % symmetric indefinite
+Pch = chart_struct(C, 'indef', tau);
+bi  = ones(n, 1);
+Vi  = orth_trunc(C' * U);
+[~, ~, ~, itA] = src.precond.two_level_split_solve(Ki, bi, 1e-8, 400, Pch, Vi, tau);
+[~, ~, ~, itB] = two_level_solve_local(          Ki, bi, 1e-8, 400, Pch, Vi, tau);
+[~, ~, ~, itC] = src.precond.two_level_split_solve(Ki, bi, 1e-8, 400, Pch, [], tau);
+[~, ~, ~, itD] = two_level_solve_local(          Ki, bi, 1e-8, 400, Pch, [], tau);
+[np, nf] = chk(np, nf, 'T23 local indef solver matches two_level_split_solve', ...
+    itA == itB && itC == itD);
+
 %% ------------------------------------------------------------ summary ----
 fprintf('\n%d passed, %d FAILED\n', np, nf);
 if nf > 0, error('test_kernel:failures', '%d checks failed', nf); end

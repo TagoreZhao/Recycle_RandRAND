@@ -22,13 +22,17 @@ function [V, D] = exp7_transport(opts)
 %   re-charting and about log10(kappa_2(C_{n+1})) digits go with it.  Reported
 %   alongside the rank drop of the column-pivoted QR.
 %
-%   See also: transport_V, orth_trunc, src.precond.two_level_split_solve.
+%   Each family solves with its own coarse correction and Krylov method
+%   (MINRES + the square-root form for 'ildl', PCG + the direct SPD form for
+%   'ichol'), so counts are comparable within a family but not across.
+%
+%   See also: transport_V, orth_trunc, two_level_solve_local, coarse_correction.
 
     if nargin < 1 || isempty(opts), opts = struct(); end
     p = add_paths();
     k    = getdef(opts, 'k',      20);
     np   = getdef(opts, 'npairs', 4);
-    tau  = getdef(opts, 'tau',    0.5);
+    % tau travels with the case (make_case sets cs.tau from opts.tau, default 0.5)
     tol  = getdef(opts, 'tol',    1e-8);
     mit  = getdef(opts, 'mit',    3000);
 
@@ -54,10 +58,10 @@ function [V, D] = exp7_transport(opts)
             Vo = orth_trunc(c2.C' * Uo);
             [d_or, go] = gap(V2, Vo);
 
-            [~,~,~, it_f] = src.precond.two_level_split_solve(c2.A, b, tol, mit, c2, V1, tau);
-            [~,~,~, it_t] = src.precond.two_level_split_solve(c2.A, b, tol, mit, c2, V2, tau);
-            [~,~,~, it_n] = src.precond.two_level_split_solve(c2.A, b, tol, mit, c2, [], tau);
-            [~,~,~, it_o] = src.precond.two_level_split_solve(c2.A, b, tol, mit, c2, Vo, tau);
+            [~,~,~, it_f] = two_level_solve_local(c2.A, b, tol, mit, c2, V1, c2.tau);
+            [~,~,~, it_t] = two_level_solve_local(c2.A, b, tol, mit, c2, V2, c2.tau);
+            [~,~,~, it_n] = two_level_solve_local(c2.A, b, tol, mit, c2, [], c2.tau);
+            [~,~,~, it_o] = two_level_solve_local(c2.A, b, tol, mit, c2, Vo, c2.tau);
 
             rows = [rows; i, round_trip, d_frozen, gf.dF, d_or, go.dF, ...
                     it_f, it_t, it_n, it_o, ...
