@@ -1,6 +1,6 @@
 function [V, D] = exp6_cost_vs_angle(opts)
 %EXP6_COST_VS_ANGLE  What a wrong subspace costs, as a function of one angle.
-%Tests Thm 4.1 (the closed form), Cor 4.2 (the MINRES rate) and Prop 4.3
+%Tests Thm 4.1 (the closed form), Cor 4.2 (the MINRES rate) and Obs 4.3
 %(deflation can be strictly worse than no deflation).
 %
 %   [V, D] = EXP6_COST_VS_ANGLE(OPTS)
@@ -122,7 +122,7 @@ function [V, D] = exp6_cost_vs_angle(opts)
     i_w   = find(rowsB(:, 3) > it_none, 1);
     i_h   = find(rowsB(:, 3) > 1.5 * rowsB(1, 3), 1);
     mono  = all(diff(rowsB(:, 3)) >= -2);          % non-decreasing up to noise
-    V = [V, vrec('exp6B', 'Prop 4.3 an inexact coarse space can be worse than none', ...
+    V = [V, vrec('exp6B', 'Obs 4.3 an inexact coarse space can be worse than none', ...
                  'its(no deflation) | first theta that loses | its there', ...
                  sprintf('%d | %.2e | %d', it_none, ...
                          nanget(thB, i_w), nanget(rowsB(:,3), i_w)), ...

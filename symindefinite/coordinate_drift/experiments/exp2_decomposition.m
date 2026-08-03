@@ -1,6 +1,6 @@
 function [V, D] = exp2_decomposition(opts)
 %EXP2_DECOMPOSITION  Measure the three terms of Thm 2.1 separately.
-%Tests Thm 2.1 (the decomposition and its reverse bound) and Thm 2.5 (Davis-Kahan
+%Tests Thm 2.1 (the decomposition and its reverse bound) and Thm 2.3 (Davis-Kahan
 %on delta_op, and the rank-2nC structure of the operator change).
 %
 %   [V, D] = EXP2_DECOMPOSITION(OPTS)
@@ -49,32 +49,56 @@ function [V, D] = exp2_decomposition(opts)
             [d_op, g_op] = gap_M(U1p, U2,  M2);
             [d_tt, g_tt] = gap_M(F,   U2,  M2);
 
-            % Davis-Kahan for delta_op, in the fixed chart n+1 (Thm 2.5)
+            % Davis-Kahan for delta_op, in the fixed chart n+1 (Thm 2.3).
+            % gamma is read off the PERTURBED operator Ahat_{n+1}, so the bound
+            % needs Weyl's correction: sin(Theta) <= ||E|| / (gamma - ||E||).
+            % Using ||E||/gamma is false -- see the counterexample in the README.
+            % When gamma <= ||E|| the separation is not established and the
+            % theorem says nothing; that is recorded as NaN, not as a pass.
             dA   = c2.A - c1.A;
             E2   = c2.applyCinv(full(dA * c2.applyCtinv(eye(c2.n))));
-            dk   = norm((E2 + E2')/2, 2) / max(i2.gap, realmin);
+            nE   = norm((E2 + E2')/2, 2);
+            gam  = i2.gap;
+            dk   = NaN;
+            if gam > nE
+                dk = nE / (gam - nE);
+            end
 
             rows = [rows; i, d_ch, d_pr, d_op, d_tt, d_ch + d_pr + d_op, ...
                     g_ch.dF, g_pr.dF, g_op.dF, g_tt.dF, ...
-                    dk, rank(full(dA)), i2.gap]; %#ok<AGROW>
+                    dk, nE, rank(full(dA)), i2.gap]; %#ok<AGROW>
         end
         T = array2table(rows, 'VariableNames', ...
             {'step', 'delta_chart', 'delta_prec', 'delta_op', 'delta_total', ...
              'sum_of_three', 'dF_chart', 'dF_prec', 'dF_op', 'dF_total', ...
-             'DK_bound_on_delta_op', 'rank_dA', 'spectral_gap'});
+             'DK_bound_on_delta_op', 'norm_E', 'rank_dA', 'spectral_gap'});
         D.(f) = T;
         disp(['[exp2/' f ']']);  disp(T);
 
         tri  = all(T.delta_total <= T.sum_of_three + 1e-9);
         rev  = all(T.delta_total >= T.delta_chart - T.delta_prec - T.delta_op - 1e-9);
-        dkok = all(T.delta_op <= T.DK_bound_on_delta_op + 1e-9);
+        % Thm 2.3 only says something where the gap beats the perturbation.
+        appl = isfinite(T.DK_bound_on_delta_op);
+        dkok = all(T.delta_op(appl) <= T.DK_bound_on_delta_op(appl) + 1e-9);
 
         V = [V, vrec(['exp2/' f], 'Thm 2.1 delta_total <= chart + prec + op', ...
                      'triangle inequality over all pairs', tri, 'true', tri)]; %#ok<AGROW>
         V = [V, vrec(['exp2/' f], 'Thm 2.1 reverse bound is not vacuous', ...
                      'total >= chart - prec - op', rev, 'true', rev)]; %#ok<AGROW>
-        V = [V, vrec(['exp2/' f], 'Thm 2.5 Davis-Kahan bounds delta_op', ...
-                     'delta_op <= ||C^-1 dA C^-T|| / gap', dkok, 'true', dkok)]; %#ok<AGROW>
+        % Where no pair is applicable the claim is untested, not confirmed:
+        % record REPORT rather than a vacuous PASS.
+        if any(appl)
+            V = [V, vrec(['exp2/' f], 'Thm 2.3 Davis-Kahan bounds delta_op (Weyl-corrected)', ...
+                         sprintf('delta_op <= ||E||/(gap-||E||), at %d of %d pairs with gap > ||E||', ...
+                                 sum(appl), height(T)), ...
+                         dkok, 'true where applicable', dkok)]; %#ok<AGROW>
+        else
+            V = [V, vrec(['exp2/' f], 'Thm 2.3 Davis-Kahan is inapplicable here', ...
+                         'pairs with gap > ||E||', ...
+                         sprintf('0 of %d (median ||E||/gap = %.3g)', ...
+                                 height(T), median(T.norm_E ./ T.spectral_gap)), ...
+                         'the bound says nothing when ||E|| exceeds the gap', NaN)]; %#ok<AGROW>
+        end
         V = [V, vrec(['exp2/' f], 'median chart term (2-norm | Frobenius)', ...
                      'median delta_chart | dF_chart', ...
                      sprintf('%.4g | %.4g', median(T.delta_chart), median(T.dF_chart)), ...
@@ -87,7 +111,7 @@ function [V, D] = exp2_decomposition(opts)
         if strcmp(f, 'ildl')
             c1 = make_case(f, 1, opts);
             rk = all(T.rank_dA == 2 * c1.nC);
-            V = [V, vrec('exp2/ildl', 'Thm 2.5 the operator change has rank exactly 2*nC', ...
+            V = [V, vrec('exp2/ildl', 'Thm 2.3 the operator change has rank exactly 2*nC', ...
                          sprintf('rank(dA) vs 2*nC=%d', 2*c1.nC), ...
                          mat2str(T.rank_dA'), 'equal', rk)]; %#ok<AGROW>
         end

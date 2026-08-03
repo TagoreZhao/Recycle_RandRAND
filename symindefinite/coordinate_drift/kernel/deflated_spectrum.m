@@ -25,7 +25,9 @@ function out = deflated_spectrum(Ahat, V, tau)
 %   Q orthogonal leaves G -- and hence every field below -- unchanged.
 %
 %   out fields:
-%     .lam        eigenvalues of B, ascending
+%     .lam        eigenvalues of B, ascending.  Computed as eig(G^1/2 Ahat G^1/2),
+%                 which is symmetric and similar to G*Ahat, so the spectrum is
+%                 that of G*Ahat exactly (pinned by test T17).
 %     .kappa      max|lam| / min|lam|, the quantity MINRES pays for
 %     .lam_min_abs, .lam_max_abs
 %     .minres_rate  the standard indefinite bound's asymptotic factor,

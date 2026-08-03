@@ -85,10 +85,19 @@ function [V, D] = exp4_continuity_sweep(opts)
         end
     end
 
-    % the separation, quoted at the smallest perturbation both families reach
+    % The separation, quoted at a MATCHED perturbation size.  The two families
+    % sweep disjoint relA ranges (the KKT step is ~1e-1, the kernel step ~1e-5),
+    % so comparing row 1 against row 1 would compare 1e-9 against 1e-13.  Take
+    % the largest relA the ichol run reaches and read the ILDL run at its
+    % nearest relA instead.
     Ti = D.runs{1}.table;  Th = D.runs{2}.table;
-    ratio = Ti.delta_chart(1) / max(Th.delta_chart(1), realmin);
-    V = [V, vrec('exp4', 'ILDL vs ichol chart drift at ||dA||/||A|| ~ 1e-8', ...
+    [relA_h, jh]  = max(Th.relA);
+    [~, ji]       = min(abs(log10(Ti.relA) - log10(relA_h)));
+    relA_i        = Ti.relA(ji);
+    ratio = Ti.delta_chart(ji) / max(Th.delta_chart(jh), realmin);
+    V = [V, vrec('exp4', ...
+                 sprintf('ILDL vs ichol chart drift at a matched ||dA||/||A|| (%.2g vs %.2g)', ...
+                         relA_i, relA_h), ...
                  'delta_chart ratio ILDL / ichol', ratio, '>> 1', ratio > 1e3)];
 
     %% ---- figure ----------------------------------------------------------

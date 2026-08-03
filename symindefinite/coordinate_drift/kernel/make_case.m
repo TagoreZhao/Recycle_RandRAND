@@ -34,7 +34,7 @@ function cs = make_case(family, idx, opts)
 %     .nsteps     Stokes steps to build, default 8
 %     .n_gp       SPD problem size, default 800
 %     .density    target kernel density after thresholding, default 0.02
-%     .sigma2     the SPD ladder, default logspace(-2, 0, 8) offset to keep SPD
+%     .sigma2     the SPD ladder, default logspace(-4, 0, 8) offset to keep SPD
 %     .ichol_type 'nofill' (default) | 'ict'
 %     .droptol    ichol ict droptol, default 1e-3
 %     .want_M     also return the explicit M = C*C' (default true)
