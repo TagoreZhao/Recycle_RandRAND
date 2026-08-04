@@ -418,7 +418,8 @@ step, solves it by backslash (ground truth) and by MINRES for every entry of the
 benchmark_final/
   all_results.csv              one row per (case, time step); <key>_its / <key>_flag
                                columns per solver, plus relres, diffF (coupling
-                               change), backslash_relres, constraint_res, nC
+                               change), backslash_relres, constraint_res, nC,
+                               solver_err_last (last solver's error vs backslash)
   speedup_summary.csv          per-case max iteration diff & factor vs the
                                unpreconditioned baseline
   paper_summary_table.csv      per-(geometry, case) mean/std iterations + max factor
@@ -435,6 +436,31 @@ benchmark_final/
 
 A fast end-to-end check runs with `SMOKE_TEST = true; run_benchmark` (single
 stress case, 2 steps).
+
+### Redrawing the figures without re-solving
+
+A full run is 3 cases × 60 steps × 8 MINRES solves, so figure changes do not go
+through `run_benchmark`. The plotting lives in its own files
+(`plot_solver_curves`, `place_solver_legend`, `save_benchmark_figure`,
+`write_case_figures`, `write_iteration_vs_timestep`,
+`write_all_cases_comparison`) and both drivers call the same code, so
+
+```matlab
+replot_benchmark                              % benchmark_no_krylov_recycle
+replot_benchmark('benchmark_krylov_recycle')
+replot_benchmark(dir, 'DryRun', true)         % list what would be overwritten
+```
+
+regenerates every PNG from `all_results.csv` + `run_config.*` via
+`load_benchmark_stats`. It rewrites **figures only** — the CSVs, `run_config.*`
+and `coefficient_movie/` are left alone (`'RewriteCsv', true` opts the
+per-solver CSVs back in). Live and replotted figures are verified
+pixel-identical by `tests/test_plot_helpers.m`, which also covers the legend
+layout, the per-solver style table and the CSV round-trip.
+
+`accuracy.png` shows the error-vs-backslash curve only for runs whose CSV has
+the `solver_err_last` column; older results directories get the MINRES relative
+residual instead, and the figure says so.
 
 ### Adding a preconditioner
 

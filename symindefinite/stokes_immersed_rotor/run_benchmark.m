@@ -144,6 +144,8 @@ for k = 1:num_cases
     st = solve_stokes_immersed(cfg, params, run_dir);
     st.mean_nnz_per_row = nnz(assemble_stokes_blocks(msh).A2) / (2*N);
     st.case_name = cname;
+    st.geometry  = geometry;   % carried so the plot writers need no extra args
+    st.dt        = params.dt;
     all_stats{k} = st;
 
     % --- coefficient movie for the stress case ---
@@ -160,18 +162,23 @@ solver_labels = all_stats{1}.solver_labels;
 write_all_results_csv(results_root, all_stats, geometry, solver_keys);
 
 % Per-case outputs (per-solver CSV+PNG, comparison, coupling change, accuracy).
+% The figure writers live in their own files so replot_benchmark can redraw
+% everything from all_results.csv without re-solving.
+figopts = benchmark_fig_defaults();
 for k = 1:num_cases
     st = all_stats{k};
-    write_case_outputs(fullfile(results_root, st.case_name), st, params.dt);
+    case_dir = fullfile(results_root, st.case_name);
+    write_case_csvs(case_dir, st);
+    write_case_figures(case_dir, st, figopts);
 end
 
 % Root collections.
 ivt_dir = fullfile(results_root, 'iteration_vs_timestep');
 if ~exist(ivt_dir, 'dir'), mkdir(ivt_dir); end
 for k = 1:num_cases
-    write_iteration_vs_timestep(ivt_dir, all_stats{k});
+    write_iteration_vs_timestep(ivt_dir, all_stats{k}, figopts);
 end
-write_all_cases_comparison(fullfile(results_root, 'summary_plots'), all_stats);
+write_all_cases_comparison(fullfile(results_root, 'summary_plots'), all_stats, figopts);
 write_speedup_summary(results_root, all_stats, geometry);
 
 % --- run config (strip non-serializable solver handles; keep keys/labels) ---
@@ -194,124 +201,6 @@ fprintf('\n[stokes_immersed_rotor] done. Output in %s\n', results_root);
 %==========================================================================
 %  Local functions
 %==========================================================================
-function write_all_results_csv(results_root, all_stats, geometry, keys)
-%WRITE_ALL_RESULTS_CSV  Master per-(case,timestep) table; solver columns follow
-% the registry order (<key>_its / <key>_flag for each solver).
-    nsolv  = numel(keys);
-    case_col = {}; ts_col = []; relres = []; diffF = [];
-    bs = []; constr = []; nCc = [];
-    its = repmat({[]}, nsolv, 1); fl = repmat({[]}, nsolv, 1);
-    for k = 1:numel(all_stats)
-        st = all_stats{k};
-        ns = numel(st.solver_its.(keys{1}));
-        case_col = [case_col; repmat({st.case_name}, ns, 1)];   %#ok<AGROW>
-        ts_col   = [ts_col;   (1:ns)'];                          %#ok<AGROW>
-        for s = 1:nsolv
-            its{s} = [its{s}; st.solver_its.(keys{s})(:)];
-            fl{s}  = [fl{s};  st.solver_flag.(keys{s})(:)];
-        end
-        relres = [relres; st.solver_relres.(keys{end})(:)];      %#ok<AGROW>
-        diffF  = [diffF;  st.coupling_change(:)];                %#ok<AGROW>
-        bs     = [bs;     st.backslash_relres(:)];               %#ok<AGROW>
-        constr = [constr; st.constraint_res(:)];                 %#ok<AGROW>
-        nCc    = [nCc;    st.nC(:)];                             %#ok<AGROW>
-    end
-    geom_col = repmat({geometry}, numel(ts_col), 1);
-    T = table(case_col, geom_col, ts_col, ...
-        'VariableNames', {'case_name', 'geometry', 'timestep'});
-    for s = 1:nsolv
-        T.([keys{s} '_its'])  = its{s};
-        T.([keys{s} '_flag']) = fl{s};
-    end
-    T.relres = relres; T.diffF = diffF; T.backslash_relres = bs;
-    T.constraint_res = constr; T.nC = nCc;
-    writetable(T, fullfile(results_root, 'all_results.csv'));
-    fprintf('Wrote %s\n', fullfile(results_root, 'all_results.csv'));
-end
-
-function write_case_outputs(run_dir, st, dt)
-%WRITE_CASE_OUTPUTS  Per-solver CSV+PNG, solver comparison, coupling change,
-% and accuracy plots for one motion case.
-    if ~exist(run_dir, 'dir'), mkdir(run_dir); end
-    keys = st.solver_keys; labels = st.solver_labels;
-    ns   = numel(st.solver_its.(keys{1}));
-    tax  = (1:ns)' * dt;
-    safe = @(v) max(v(:), 1);
-
-    % per-solver iteration CSV + PNG
-    for s = 1:numel(keys)
-        itv = st.solver_its.(keys{s})(:);
-        Tk = table((1:ns)', itv, 'VariableNames', {'timestep', 'iterations'});
-        writetable(Tk, fullfile(run_dir, [keys{s} '_solver_iterations.csv']));
-        fh = figure('Visible', 'off', 'Position', [100 100 700 380]);
-        semilogy(tax, safe(itv), '-o', 'MarkerSize', 3, 'LineWidth', 1.2);
-        grid on; xlabel('t'); ylabel('MINRES iterations');
-        title(sprintf('%s: %s', st.case_name, labels{s}), 'Interpreter', 'none');
-        saveas(fh, fullfile(run_dir, [keys{s} '_solver_iterations.png'])); close(fh);
-    end
-
-    % all-solvers comparison
-    fh = figure('Visible', 'off', 'Position', [100 100 760 420]);
-    plot_solver_curves(tax, st, 't');
-    title(sprintf('%s: solver comparison', st.case_name), 'Interpreter', 'none');
-    saveas(fh, fullfile(run_dir, 'all_solvers_comparison.png')); close(fh);
-
-    % per-step coupling change
-    fh = figure('Visible', 'off', 'Position', [100 100 700 380]);
-    plot(tax, st.coupling_change(:), '.-', 'LineWidth', 1.2); grid on;
-    xlabel('t'); ylabel('||\DeltaC||_F / ||C||_F');
-    title(sprintf('%s: per-step coupling change', st.case_name), 'Interpreter', 'none');
-    saveas(fh, fullfile(run_dir, 'relative_step_to_step_change.png')); close(fh);
-
-    % accuracy: best-preconditioned error vs backslash + constraint residual
-    fh = figure('Visible', 'off', 'Position', [100 100 700 380]);
-    err = st.solver_err.(keys{end})(:);
-    semilogy(tax, max(err, 1e-16), '-', 'LineWidth', 1.2); hold on;
-    semilogy(tax, max(st.constraint_res(:), 1e-16), '--', 'LineWidth', 1.2);
-    grid on; xlabel('t'); ylabel('relative');
-    legend(sprintf('%s vs backslash', labels{end}), 'constraint ||Cu-g||/||g||', ...
-           'Location', 'best', 'Interpreter', 'none');
-    title(sprintf('%s: accuracy', st.case_name), 'Interpreter', 'none');
-    saveas(fh, fullfile(run_dir, 'accuracy.png')); close(fh);
-end
-
-function write_iteration_vs_timestep(out_dir, st)
-%WRITE_ITERATION_VS_TIMESTEP  All solvers' iterations vs time step for one case.
-    fh = figure('Visible', 'off', 'Position', [100 100 760 420]);
-    plot_solver_curves((1:numel(st.solver_its.(st.solver_keys{1})))', st, 'time step n');
-    title(sprintf('%s: iterations vs time step', st.case_name), 'Interpreter', 'none');
-    saveas(fh, fullfile(out_dir, [st.case_name '.png'])); close(fh);
-end
-
-function write_all_cases_comparison(out_dir, all_stats)
-%WRITE_ALL_CASES_COMPARISON  One subplot per case, all solvers overlaid.
-    if ~exist(out_dir, 'dir'), mkdir(out_dir); end
-    nc = numel(all_stats);
-    fh = figure('Visible', 'off', 'Position', [100 100 max(420*nc, 480) 400]);
-    for k = 1:nc
-        st = all_stats{k};
-        subplot(1, nc, k);
-        plot_solver_curves((1:numel(st.solver_its.(st.solver_keys{1})))', st, 'time step');
-        title(st.case_name, 'Interpreter', 'none');
-    end
-    saveas(fh, fullfile(out_dir, 'all_cases_comparison.png')); close(fh);
-end
-
-function plot_solver_curves(xax, st, xlab)
-%PLOT_SOLVER_CURVES  Overlay every solver's iteration curve on a semilog axis.
-    keys = st.solver_keys; labels = st.solver_labels;
-    markers = {'-o', '-s', '-^', '-d', '-v', '-p'};
-    safe = @(v) max(v(:), 1);
-    hold on;
-    for s = 1:numel(keys)
-        semilogy(xax, safe(st.solver_its.(keys{s})), ...
-            markers{mod(s-1, numel(markers)) + 1}, 'MarkerSize', 3, 'LineWidth', 1.2);
-    end
-    set(gca, 'YScale', 'log'); grid on;
-    xlabel(xlab); ylabel('MINRES iterations');
-    legend(labels, 'Location', 'best', 'Interpreter', 'none');
-end
-
 function write_speedup_summary(results_root, all_stats, geometry)
 %WRITE_SPEEDUP_SUMMARY  Per-(geometry,case) max iteration difference and factor
 % of the unpreconditioned baseline vs each other solver.
