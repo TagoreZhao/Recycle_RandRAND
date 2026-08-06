@@ -40,6 +40,7 @@ function solvers = define_solver_list(params)
 %     ILDL_PREC_REFRESH      incomplete-LDL factor C
 %     DEFLAT_PREC_REFRESH    deflation subspace V
 %     DINVERSE_PREC_REFRESH  exact A^-1 factor (sketched V methods)
+%     EXACT_PREC_REFRESH     EXACT LDL factor C (the frozen exact_ldl_frozen arm)
 %
 %   Two-level / deflation method knobs (params.*; defaults mirror
 %   report/ball_surface/run_benchmark.m):
@@ -94,6 +95,7 @@ function solvers = define_solver_list(params)
     R_ildl   = getdef(params, 'ILDL_PREC_REFRESH',     1);
     R_deflat = getdef(params, 'DEFLAT_PREC_REFRESH',   Inf);
     R_dinv   = getdef(params, 'DINVERSE_PREC_REFRESH', Inf);
+    R_exact  = getdef(params, 'EXACT_PREC_REFRESH',    Inf);
 
     % --- two-level / deflation hyperparameters (from params, with defaults) ---
     %   Defaults mirror report/ball_surface/run_benchmark.m (sm_eig=500, tau=0.5,
@@ -129,6 +131,23 @@ function solvers = define_solver_list(params)
         'build', [], ...
         'solve', @(K,b,tol,mit,pc) ...
                  tl_solve(K, b, tol, mit, pc, 'none', DEFL, R_ildl, R_deflat, R_dinv));
+
+    % Exact LDL of the step-1 KKT, FROZEN for every later step (own cadence).
+    % Not an approximation: with nothing dropped, C = S^-1 P^T L |D|^{1/2} gives
+    % M = C C^T = |K| and Ahat = C^-1 K C^-T = sign(D), a matrix whose eigenvalues
+    % are exactly +-1 -- 2 MINRES iterations on the matrix it was built from.
+    % Applied unchanged to K_n it isolates ONE variable: how fast an EXACT factor
+    % stops preconditioning as the coupling block C(t_n) drifts, with smoother
+    % quality removed from the comparison.  K_n - K_1 is symmetric of rank <= 2*nC,
+    % so Ahat_n is sign(D_1) plus a rank-<=2*nC update: this curve is the FLOOR the
+    % deflation and Krylov-recycling arms are trying to reach cheaply, not a
+    % competitor to them.  EXACT_PREC_REFRESH = Inf keeps the step-1 factor forever.
+    solvers{end+1} = struct( ...
+        'key',   'exact_ldl_frozen', ...
+        'label', 'MINRES (exact LDL of step 1, frozen)', ...
+        'build', [], ...
+        'solve', @(K,b,tol,mit,pc) ...
+                 exact_ldl_solve(K, b, tol, mit, pc, R_exact, DEFL.tau));
 
     % Two-level deflation (ILDL smoother + indefinite deflation, B = L^-T P L^-1),
     % one entry per V-building operation.
@@ -177,6 +196,36 @@ function [x, fl, rr, it] = tl_solve(K, b, tol, mit, pc, method, opts, R_ildl, R_
 % split-operator MINRES via src.precond.two_level_split_solve.
     [P, V] = two_level_parts(K, pc, method, opts, R_ildl, R_deflat, R_dinv);
     [x, fl, rr, it] = src.precond.two_level_split_solve(K, b, tol, mit, P, V, opts.tau);
+end
+
+function [x, fl, rr, it] = exact_ldl_solve(K, b, tol, mit, pc, refresh, tau)
+%EXACT_LDL_SOLVE  Split MINRES preconditioned by the EXACT LDL^T factor of the KKT
+% matrix from the last refresh step (default: step 1, then frozen forever).
+%
+% The same split solve as the ildl_nofill entry -- MINRES on Ahat = C^-1 K C^-T,
+% no coarse space -- but C comes from make_ildl_precond's 'exact' mode, so M = C C^T
+% is |K| exactly and Ahat = sign(D).  The fresh step therefore costs 2 iterations
+% and every later step's count is pure drift of C(t_n).  tau is inert here
+% (two_level_split_solve ignores it when V is empty) and is passed only so the
+% signature matches the other split entries.
+%
+% CACHE KEY.  'exact_ldl_frozen' is deliberately NOT of the form ['ildl_' mode] that
+% two_level_parts builds, so it can never alias the smoother the ILDL / two-level
+% entries share -- not even when a caller sets ILDL_MODE = 'exact', which makes
+% THEIR key 'ildl_exact'.  The two factors then coexist under different cadences
+% (ILDL_PREC_REFRESH vs EXACT_PREC_REFRESH), which is the whole point of this arm.
+%
+% VALIDITY PREDICATE.  Required, not decorative.  A frozen factor is APPLIED at
+% every later step, so unlike the every-step ILDL it can be handed a K of a
+% different size: size(K,1) = nU + nP + nC, and nC drops if a Lagrange point leaves
+% the fluid mesh (the hazard cached_basis guards with size(e.U,1) ~= n).  Without
+% the predicate this is an opaque dimension error inside applyCinv's `s .* r`; with
+% it, `cached` rebuilds and warns -- and the warning matters, because a forced
+% rebuild silently un-freezes the arm and changes what it measures.
+    P = cached(pc, 'exact_ldl_frozen', refresh, ...
+               @() src.precond.make_ildl_precond(K, struct('mode', 'exact')), ...
+               @(v) numel(v.s) == size(K, 1));
+    [x, fl, rr, it] = src.precond.two_level_split_solve(K, b, tol, mit, P, [], tau);
 end
 
 function [x, fl, rr, it] = tl_solve_krylov(K, b, tol, mit, pc, opts, R_ildl, R_deflat, R_dinv)
@@ -353,10 +402,19 @@ function add_transport_path()
     end
 end
 
-function v = cached(pc, key, refresh, buildFn)
+function v = cached(pc, key, refresh, buildFn, isValidFn)
 %CACHED  Per-component refresh cache keyed in pc.cache (one rebuild at most per
 % step, on the mod(step-1,refresh)==0 cadence).  Shared keys (ildl/dinv) are thus
 % built once per refresh-step and reused across solver entries within that step.
+%
+% ISVALIDFN (optional) is a predicate on the CACHED VALUE that must also hold
+% before the value may be reused.  It exists for FROZEN factors (refresh = Inf),
+% which are APPLIED at every later step and can therefore meet a K of a different
+% size -- size(K,1) = nU + nP + nC changes when a Lagrange point leaves the fluid
+% mesh, the same hazard cached_basis guards with size(e.U,1) ~= n.  Omit it and the
+% cadence logic is character-for-character what it was, which is how the ildl /
+% dinv / blockjac_Lc call sites keep their behaviour exactly.
+    if nargin < 5, isValidFn = []; end
     c = pc.cache;
     if ~isKey(c, key)
         v = buildFn();
@@ -364,7 +422,16 @@ function v = cached(pc, key, refresh, buildFn)
         return;
     end
     e = c(key);
-    if e.step ~= pc.step && mod(pc.step - 1, refresh) == 0
+    stale = ~isempty(isValidFn) && ~isValidFn(e.val);
+    if stale
+        % A forced rebuild un-freezes the factor, so this step no longer measures
+        % what the arm exists to measure.  Never let that happen silently.
+        warning('define_solver_list:cacheShapeChanged', ...
+                ['step %d: cached "%s" no longer fits the current system (the ' ...
+                 'multiplier count changed); rebuilding -- this step is NOT the ' ...
+                 'frozen factor.'], pc.step, key);
+    end
+    if stale || (e.step ~= pc.step && mod(pc.step - 1, refresh) == 0)
         v = buildFn();
         c(key) = struct('step', pc.step, 'val', v);
     else

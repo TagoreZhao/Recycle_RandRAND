@@ -6,7 +6,8 @@
 % changes because the solid moves.  Per step the system is solved by backslash
 % (ground truth) and by MINRES for every solver in the registry
 % (define_solver_list): the unpreconditioned solve, the SPD block-diagonal
-% "block Jacobi" preconditioner, incomplete-LDL, the two-level deflation family
+% "block Jacobi" preconditioner, incomplete-LDL, the EXACT LDL factor of step 1
+% frozen for the whole sequence (exact_ldl_frozen), the two-level deflation family
 % (L^-T P L^-1, with exact / gaussian / sjlt / polynomial coarse spaces), and the
 % Krylov-recycling variant two_level_krylov.
 % Method knobs and per-preconditioner refresh cadences are set in the params
@@ -56,6 +57,7 @@ params.BLOCKJAC_PREC_REFRESH = Inf;   % block-Jacobi ichol factor
 params.ILDL_PREC_REFRESH     = 1;     % incomplete-LDL factor C
 params.DEFLAT_PREC_REFRESH   = Inf;   % deflation subspace V
 params.DINVERSE_PREC_REFRESH = Inf;   % exact A^{-1} factor (sketched V methods)
+params.EXACT_PREC_REFRESH    = Inf;   % EXACT LDL factor of the step-1 KKT (frozen)
 
 % Two-level / deflation method parameters (shared by all two-level V methods;
 % consumed by define_solver_list -> build_deflation_V).  Defaults mirror

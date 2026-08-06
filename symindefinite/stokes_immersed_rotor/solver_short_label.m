@@ -5,7 +5,7 @@ function s = solver_short_label(key)
 %   S = SOLVER_SHORT_LABEL(KEYS)  KEYS cellstr -> S cellstr of the same size
 %
 %   The registry labels in define_solver_list are up to 57 characters
-%   ('MINRES (ILDL + deflation L^{-T}PL^{-1}, gaussian V)').  Eight of those in
+%   ('MINRES (ILDL + deflation L^{-T}PL^{-1}, gaussian V)').  Nine of those in
 %   one legend is wider than the axes, which is why the legend used to sit on
 %   top of the data.  These names are <= 30 characters; the full label still
 %   appears as the subtitle of the per-solver figure, and the shared
@@ -27,6 +27,7 @@ function s = solver_short_label(key)
         case 'minres_unprec',        s = 'unpreconditioned';
         case 'block_jacobi',         s = 'block Jacobi';
         case 'ildl_nofill',          s = 'ILDL (no-fill)';
+        case 'exact_ldl_frozen',     s = 'exact LDL (frozen)';
         case 'two_level_sjlt',       s = '2-level: sjlt V';
         case 'two_level_gaussian',   s = '2-level: gaussian V';
         case 'two_level_polynomial', s = '2-level: polynomial V';

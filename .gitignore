@@ -25,3 +25,9 @@ amg_subspace/output_tsym_smoke/
 # AMG deflation-vs-preconditioning study outputs (regenerated on run)
 amg_subspace/output_defl/
 amg_subspace/output_defl_smoke/
+
+# Schur-complement twin of the immersed-rotor benchmark (regenerated on run)
+symindefinite/stokes_immersed_rotor_schur_comp/schur_recycle/
+symindefinite/stokes_immersed_rotor_schur_comp/schur_recycle_smoke/
+symindefinite/stokes_immersed_rotor_schur_comp/output/
+symindefinite/stokes_immersed_rotor_schur_comp/cache/

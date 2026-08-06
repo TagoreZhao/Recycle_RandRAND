@@ -292,7 +292,8 @@ The baseline registry is:
 1. **MINRES, unpreconditioned**;
 2. **MINRES with an SPD block-diagonal preconditioner** $P$ (defined below);
 
-plus the incomplete-LDL and two-level deflation families described next.
+plus the incomplete-LDL, frozen-exact-LDL and two-level deflation families
+described next.
 
 The preconditioner is
 
@@ -323,6 +324,21 @@ SPD `report/solve_deflate_M_P` scheme (ICHOL→ILDL, PCG→MINRES):
   preconditioner). It is run as a **split solve**: MINRES on
   $\hat A = C^{-1}\mathcal K C^{-\top}$, recovering $x=C^{-\top}y$.
 
+- **Exact LDL, frozen (`exact_ldl_frozen`)** — the same split solve with the
+  smoother's *approximation* removed. `make_ildl_precond(..., 'exact')` drops
+  nothing, so $C=S^{-1}P^\top L|D|^{1/2}$ satisfies $CC^\top=|\mathcal K|$ exactly
+  and $\hat A = C^{-1}\mathcal K C^{-\top} = \mathrm{sign}(D)$, whose spectrum is
+  exactly $\{\pm 1\}$: **2 MINRES iterations** on the matrix it was built from.
+  Built at step 1 and then frozen (`EXACT_PREC_REFRESH = Inf`), so its per-step
+  count is a direct, smoother-free measurement of how fast an *exact* factor stops
+  preconditioning as $C(t_n)$ drifts. Because
+  $\mathcal K_n = \mathcal K_1 + \Delta C\,\Sigma^\top + \Sigma\,\Delta C^\top$ is a
+  symmetric update of rank $\le 2n_C$, $\hat A_n$ is $\mathrm{sign}(D_1)$ plus a
+  rank-$\le 2n_C$ perturbation — this curve is the **floor** the deflation and
+  Krylov-recycling arms are trying to reach cheaply, not a competitor to them. On
+  `disk_static` ($\mathcal K$ constant) it stays at 2 forever, which is the control
+  that proves the freeze itself is sound (`test_exact_ldl_frozen`).
+
 - **Two-level deflation (`two_level_*`)** — the standard split form
   $B=L^{-\top}PL^{-1}$ ($L=C$): MINRES on $\hat A$ with the indefinite deflation
   projector $P_{\rm def}=(I-\hat V\hat V^\top)+\tau\,\hat V|\hat E|^{-1}\hat V^\top$
@@ -343,7 +359,8 @@ cadences** — one knob per preconditioner component, mirroring the report's
 `*_PREC_REFRESH` (default `Inf` = build once and **recycle** across the moving
 sequence; set to `N` to rebuild every `N` steps):
 `BLOCKJAC_PREC_REFRESH`, `ILDL_PREC_REFRESH`, `DEFLAT_PREC_REFRESH` (the basis
-$\hat V$), `DINVERSE_PREC_REFRESH` (the exact-inverse factor for sketched V).
+$\hat V$), `DINVERSE_PREC_REFRESH` (the exact-inverse factor for sketched V),
+`EXACT_PREC_REFRESH` (the frozen exact-LDL factor).
 
 **Coordinates: $\hat V$ is a representation, not a subspace.** MINRES runs on
 $\hat A_n = C_n^{-1}\mathcal K_n C_n^{-\top}$ with $\hat y = C_n^\top x$, so a basis
@@ -439,7 +456,7 @@ stress case, 2 steps).
 
 ### Redrawing the figures without re-solving
 
-A full run is 3 cases × 60 steps × 8 MINRES solves, so figure changes do not go
+A full run is 3 cases × 60 steps × 9 MINRES solves, so figure changes do not go
 through `run_benchmark`. The plotting lives in its own files
 (`plot_solver_curves`, `place_solver_legend`, `save_benchmark_figure`,
 `write_case_figures`, `write_iteration_vs_timestep`,
@@ -491,6 +508,17 @@ per step on a `mod(step-1, refresh)==0` cadence (shared keys reused across solve
 entries within a step), so a preconditioner can be given its own
 `*_PREC_REFRESH` knob (set in `run_benchmark.m`, `Inf` = build once). Add a new
 **V-building operation** by adding a `case` to `build_deflation_V.m`.
+
+`cached` takes an optional fifth argument, a predicate on the cached value that
+must also hold before it may be reused:
+`cached(pc, key, refresh, @() build(), @(v) numel(v.s) == size(K,1))`. It is for
+**frozen** factors (`refresh = Inf`), which unlike the every-step ILDL are
+*applied* at later steps and can therefore meet a $\mathcal K$ of a different
+size — $n = n_U+n_P+n_C$ shrinks if a Lagrange point leaves the fluid mesh. When
+the predicate fails, `cached` rebuilds and warns
+(`define_solver_list:cacheShapeChanged`) rather than failing inside `applyCinv`;
+the warning matters because a forced rebuild silently *un-freezes* the arm. Omit
+the argument and the cadence logic is exactly what it was.
 
 Deflation bases use `cached_basis` instead, which stores the **physical** basis
 `U = C^{-T} V` on the same cadence and maps it into the current step's split

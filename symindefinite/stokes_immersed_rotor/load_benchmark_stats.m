@@ -7,7 +7,7 @@ function [all_stats, cfg] = load_benchmark_stats(results_root)
 %   and returns the same struct shape solve_stokes_immersed produces, so the
 %   figure writers cannot tell which path they are being driven from.  This is
 %   what makes replotting possible without re-solving: a full run is 3 cases x
-%   61 steps x 8 MINRES solves at up to 4000 iterations.
+%   61 steps x 9 MINRES solves at up to 4000 iterations.
 %
 %   ALL_STATS{k} has:
 %       .case_name .geometry .dt

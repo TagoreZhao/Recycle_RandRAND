@@ -16,13 +16,16 @@ function P = make_ildl_precond(A, opts)
 %
 %   "Incomplete" is the cheapest level-0 (no-fill) variant by default: the exact
 %   factor L is restricted to the sparsity pattern of A (the LDL^T analog of
-%   ichol('nofill')).  D is kept exact (it is cheap, block diagonal).
+%   ichol('nofill')).  D is kept exact (it is cheap, block diagonal).  Mode
+%   'exact' does the opposite and drops nothing, so C is the exact factor,
+%   M = |A| and C^-1 A C^-T = sign(D) -- the ideal-smoother limit of the family.
 %
 %   Inputs:
 %     A    - n x n sparse symmetric indefinite matrix
 %     opts - (optional) struct:
 %              .mode    'nofill' (default) restrict L to pattern of A;
-%                       'droptol' drop |L_ij| < droptol.
+%                       'droptol' drop |L_ij| < droptol;
+%                       'exact'   no dropping (C C^T = |A|, C^-1 A C^-T = sign(D)).
 %              .droptol absolute drop tolerance for mode 'droptol' (default 1e-3).
 %
 %   Output struct P:
@@ -60,6 +63,15 @@ function P = make_ildl_precond(A, opts)
             keep = abs(L) >= opts.droptol;
             keep = keep | (speye(n) > 0); % always keep the unit diagonal
             L    = L .* keep;
+        case 'exact'
+            % No dropping at all: L stays the factor ldl returned.  Then
+            % C = S^-1 P^T L |D|^{1/2} gives M = C C^T = |A| EXACTLY, and
+            % C^-1 A C^-T = |D|^{-1/2} D |D|^{-1/2} = sign(D), whose eigenvalues
+            % are exactly +-1 -- MINRES on the split operator converges in 2
+            % iterations.  Not a smoother but the smoother's LIMIT: it exists so
+            % an experiment can take approximation quality out of the picture and
+            % measure something else (how fast a factor of A_1 stops
+            % preconditioning A_n).  Costs a full ldl and full triangular solves.
         otherwise
             error('make_ildl_precond:mode', 'unknown opts.mode "%s"', opts.mode);
     end
