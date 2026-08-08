@@ -5,9 +5,11 @@ function solvers = define_solver_list(params)
 %   solvers = define_solver_list(params)
 %
 %   Returns a cell array of solver structs.  Each per-step KKT system is
-%   SYMMETRIC INDEFINITE and is solved with MINRES; a solver entry differs only
-%   in the (SPD) preconditioner it applies, or supplies its own self-contained
-%   solve.  This is the extensibility seam: adding a preconditioner is a single
+%   SYMMETRIC INDEFINITE and is solved with MINRES -- except the one GMRES arm
+%   below, whose preconditioner is indefinite by construction; a solver entry
+%   differs only in the (SPD) preconditioner it applies, or supplies its own
+%   self-contained solve.  This is the extensibility seam: adding a preconditioner
+%   is a single
 %   struct appended here — the engine (solve_stokes_immersed) and the driver
 %   (run_benchmark, make_paper_summary_table) pick it up automatically for CSV
 %   columns, plots and the summary table.
@@ -21,7 +23,10 @@ function solvers = define_solver_list(params)
 %     .solve  @(K,b,tol,mit,pc) -> [x,flag,relres,iters]   OPTIONAL.  When
 %             present (and non-empty) the engine calls it instead of the
 %             build+minres path; used by the two-level scheme, which runs MINRES
-%             on the split operator C^-1 K C^-T and unwinds.
+%             on the split operator C^-1 K C^-T and unwinds, and by the GMRES
+%             arm (the build path hard-codes minres).  iters MUST be a SCALAR --
+%             the engine assigns it into one element of a per-step array, so a
+%             1x2 [outer inner] from gmres has to be collapsed by the closure.
 %
 %   pc is a context struct the engine fills:
 %     pc.Lc    ichol factor of the (BC-eliminated) velocity block Avel
@@ -52,6 +57,15 @@ function solvers = define_solver_list(params)
 %     DEFLAT_RECYCLE_K     # Krylov vectors recycled per step (two_level_krylov)
 %     ILDL_MODE            incomplete-LDL pattern: 'nofill' | 'droptol'
 %     ILDL_DROPTOL         drop tolerance when ILDL_MODE = 'droptol'
+%     GMRES_MAXIT          iteration cap for the (unrestarted) gmres_exact_inv_frozen
+%                          arm; must stay above 2*nC+1 or it caps the claim
+%
+%   Low-rank finite termination (the 'gmres_exact_inv_frozen' entry).  K_n - K_1 is
+%   symmetric of rank 2*rank(dC) <= 2*nC, so left-preconditioning K_n with the EXACT
+%   SIGNED inverse of K_1 gives I plus a rank-r update and unrestarted GMRES must
+%   terminate in <= r+1 iterations.  MINRES cannot run this operator (K_1^-1 is
+%   indefinite), which is exactly why the arm is GMRES.  See gmres_frozen_solve and
+%   write_lowrank_bound_figure.
 %
 %   Krylov recycling (the 'two_level_krylov' entry).  Consecutive KKT systems differ
 %   only through the moving coupling block C(t_n), so the directions MINRES converged
@@ -96,6 +110,9 @@ function solvers = define_solver_list(params)
     R_deflat = getdef(params, 'DEFLAT_PREC_REFRESH',   Inf);
     R_dinv   = getdef(params, 'DINVERSE_PREC_REFRESH', Inf);
     R_exact  = getdef(params, 'EXACT_PREC_REFRESH',    Inf);
+
+    % --- GMRES budget (the low-rank arm; full/unrestarted, see gmres_frozen_solve) ---
+    GMRES_MAXIT = getdef(params, 'GMRES_MAXIT', 300);
 
     % --- two-level / deflation hyperparameters (from params, with defaults) ---
     %   Defaults mirror report/ball_surface/run_benchmark.m (sm_eig=500, tau=0.5,
@@ -163,6 +180,24 @@ function solvers = define_solver_list(params)
                      tl_solve(K, b, tol, mit, pc, meth, opts, R_ildl, R_deflat, R_dinv)); %#ok<AGROW>
     end
 
+    % GMRES on the EXACT SIGNED inverse of the step-1 KKT, frozen (own cadence).
+    % The one arm in the registry that is not MINRES, because it cannot be: the
+    % preconditioner is K_1^-1 itself, which is INDEFINITE.  That is the point.
+    % exact_ldl_frozen has to SPD-ify the same factor for MINRES (M = |K_1|), so
+    % what MINRES sees is sign(D_1) + rank-2nC; GMRES sees
+    %     K_1^-1 K_n = I + K_1^-1 (K_n - K_1),
+    % an identity plus a rank-r update (r = 2 rank(dC) <= 2 nC), whose minimal
+    % polynomial has degree <= r+1.  Unrestarted GMRES must therefore terminate in
+    % at most 2 nC + 1 iterations -- the claim write_lowrank_bound_figure plots.
+    % Registered BEFORE two_level_krylov so the last-solver privileges (accuracy.png,
+    % the relres / solver_err_last CSV columns, the engine progress print) stay put.
+    solvers{end+1} = struct( ...
+        'key',   'gmres_exact_inv_frozen', ...
+        'label', 'GMRES (exact K_1^{-1} of step 1, frozen; I + rank-2n_C)', ...
+        'build', [], ...
+        'solve', @(K,b,tol,mit,pc) ...
+                 gmres_frozen_solve(K, b, tol, mit, pc, R_exact, GMRES_MAXIT));
+
     % Krylov recycling: the gaussian coarse space + the last DEFLAT_RECYCLE_K
     % ILDL-preconditioned residuals harvested from the PREVIOUS step's solve.
     % Registered LAST -> featured in accuracy.png and the engine's progress print.
@@ -226,6 +261,53 @@ function [x, fl, rr, it] = exact_ldl_solve(K, b, tol, mit, pc, refresh, tau)
                @() src.precond.make_ildl_precond(K, struct('mode', 'exact')), ...
                @(v) numel(v.s) == size(K, 1));
     [x, fl, rr, it] = src.precond.two_level_split_solve(K, b, tol, mit, P, [], tau);
+end
+
+function [x, fl, rr, it] = gmres_frozen_solve(K, b, tol, mit, pc, refresh, gmaxit)
+%GMRES_FROZEN_SOLVE  Unrestarted GMRES left-preconditioned by the EXACT SIGNED
+% inverse of the KKT matrix from the last refresh step (default: step 1, frozen).
+%
+% Tests the finite-termination property the benchmark's low-rank structure implies.
+% K_n - K_1 is symmetric of rank 2 rank(dC) <= 2 nC, so
+%     K_1^-1 K_n = I + K_1^-1 (K_n - K_1)
+% is an identity plus a rank-r update; its minimal polynomial has degree <= r+1 and
+% full GMRES annihilates the residual in at most that many iterations.  Nothing here
+% is an approximation to be tuned -- the arm either meets 2 nC + 1 or it does not.
+%
+% WHY GMRES.  MINRES needs an SPD preconditioner, so exact_ldl_frozen must replace D
+% by |D| and ends up on sign(D_1) + rank-r, which has 2 distinct eigenvalues rather
+% than 1 and loses the clean I + low-rank statement.  GMRES has no such constraint
+% and can use K_1^-1 verbatim, indefinite as it is.
+%
+% NO RESTART.  restart = [] is load-bearing: a restarted GMRES throws away the
+% Krylov space that carries the finite-termination argument.  gmaxit
+% (params.GMRES_MAXIT) is then a plain cap on total iterations; it must stay
+% comfortably above 2 nC + 1 or the arm measures the budget instead of the claim.
+%
+% ITERATION COUNT.  MATLAB's gmres returns iter as a 1x2 [outer inner] even when
+% unrestarted, but solve_stokes_immersed assigns the 4th output into ONE element of
+% a per-step array.  Forwarding it verbatim is a run-time error, so it is collapsed
+% here; unrestarted means outer == 1, hence iter(end) is the total count.
+%
+% RELRES is the PRECONDITIONED relative residual ||M^-1(b - Kx)|| / ||M^-1 b||, which
+% is what left preconditioning measures.  The unambiguous accuracy check is
+% Astat.solver_err (against the backslash solution), recorded by the engine anyway.
+%
+% CACHE KEY / VALIDITY.  Own key on the EXACT_PREC_REFRESH cadence, deliberately not
+% 'dinv' (whose cadence is DINVERSE_PREC_REFRESH and which the sketched-V arms share)
+% and not exact_ldl_frozen's key -- same non-aliasing reasoning as exact_ldl_solve.
+% The predicate is required for the same reason: a frozen factor is APPLIED at every
+% later step and size(K,1) = nU + nP + nC shrinks if a Lagrange point leaves the mesh.
+% The predicate reads v.MatrixSize, NOT size(v): a decomposition is a scalar object,
+% so size() reports [1 1] and the test would fire on every step, un-freezing the arm
+% (loudly -- `cached` warns -- but every step, which is worse than useless).
+% (K+K')/2 and an explicit 'ldl' keep a round-off asymmetry from silently downgrading
+% the factorization to a general LU.
+    dec = cached(pc, 'gmres_frozen_dec', refresh, ...
+                 @() decomposition((K + K')/2, 'ldl'), ...
+                 @(v) v.MatrixSize(1) == size(K, 1));
+    [x, fl, rr, iter] = gmres(K, b, [], tol, min(gmaxit, mit), @(v) dec \ v);
+    it = iter(end);
 end
 
 function [x, fl, rr, it] = tl_solve_krylov(K, b, tol, mit, pc, opts, R_ildl, R_deflat, R_dinv)

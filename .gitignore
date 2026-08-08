@@ -36,3 +36,12 @@ symindefinite/stokes_immersed_rotor_schur_comp/output/
 symindefinite/stokes_immersed_rotor_schur_comp/cache/
 # example Schur operators from schur_extract_examples.m (~221 MB each at h0=0.03)
 symindefinite/stokes_immersed_rotor_schur_comp/*.mat
+
+# Woodbury-update twin of the immersed-rotor benchmark.  woodbury_direct/ is
+# COMMITTED (1.5 MB: 3 CSVs + 16 figures) because README.md embeds those figures
+# inline and quotes their numbers -- same reason coordinate_drift/figures/ is kept.
+# The smoke run and any ad-hoc output are regenerated.
+symindefinite/stokes_immersed_rotor_woodbury/woodbury_direct_smoke/
+symindefinite/stokes_immersed_rotor_woodbury/output/
+# top level only; the committed woodbury_direct/run_config.mat is one level deeper
+symindefinite/stokes_immersed_rotor_woodbury/*.mat

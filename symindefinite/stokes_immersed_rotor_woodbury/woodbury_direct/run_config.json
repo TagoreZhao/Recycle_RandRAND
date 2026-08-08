@@ -1,0 +1,16 @@
+{
+  "h0": 0.05,
+  "dt": 0.02,
+  "Tstep": 61,
+  "cases": [
+    "bar_rotating",
+    "disk_translating",
+    "disk_static"
+  ],
+  "max_steps": [],
+  "verify_lowrank": true,
+  "use_cache": true,
+  "TIME_REPEATS": 3,
+  "COMPUTE_SPECTRUM": false,
+  "SPECTRUM_TOL": 1E-8
+}

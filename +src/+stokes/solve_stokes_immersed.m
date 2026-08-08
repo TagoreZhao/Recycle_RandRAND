@@ -44,9 +44,9 @@ function Astat = solve_stokes_immersed(cfg, params, save_dir)
 %
 %   Returns Astat with (Tstep-1)x1 per-step arrays, keyed by solver:
 %     .solver_keys, .solver_labels  - ordered ids/labels from the registry
-%     .solver_its.(key)             - MINRES iterations
-%     .solver_flag.(key)            - MINRES convergence flag
-%     .solver_relres.(key)          - MINRES relative residual
+%     .solver_its.(key)             - Krylov iterations
+%     .solver_flag.(key)            - Krylov convergence flag
+%     .solver_relres.(key)          - Krylov relative residual
 %     .solver_err.(key)             - ||x_solver - x_ref|| / ||x_ref||
 %     .backslash_relres      (||K x - b|| / ||b||, ground truth)
 %     .constraint_res        (||C u - g|| / ||g||, ground-truth solution)
@@ -207,7 +207,10 @@ function Astat = solve_stokes_immersed(cfg, params, save_dir)
         x_ref = K \ b;
         Astat.backslash_relres(n) = norm(K * x_ref - b) / max(norm(b), eps);
 
-        % --- (2) MINRES for each registered solver ---
+        % --- (2) one Krylov solve per registered solver ---
+        % A .solve entry owns its own Krylov method (the build path below is
+        % MINRES); it must return a SCALAR iteration count, because it is
+        % assigned into one element of the per-step array a few lines down.
         mit    = min(maxit, ntot);
         pc.nC  = nC;
         pc.K   = K;
@@ -250,7 +253,7 @@ function Astat = solve_stokes_immersed(cfg, params, save_dir)
         u_prev = u_ref;
 
         if mod(n, max(1, round(nsteps/5))) == 0 || n == nsteps
-            fprintf('  [%s] step %3d/%d  nC=%4d  MINRES(%s)=%4d its  rr=%.1e  err=%.1e\n', ...
+            fprintf('  [%s] step %3d/%d  nC=%4d  its(%s)=%4d  rr=%.1e  err=%.1e\n', ...
                 getfield_default(cfg,'case_name','stokes'), n, nsteps, nC, ...
                 solver_keys{end}, it_last, rr_last, err_last);
         end

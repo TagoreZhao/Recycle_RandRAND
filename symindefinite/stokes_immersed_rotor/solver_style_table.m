@@ -8,19 +8,25 @@ function sty = solver_style_table(n)
 %       .linewidth  scalar
 %       .markersize scalar
 %
-%   The eight base rows are the Okabe-Ito colourblind-safe palette (yellow
-%   dropped -- illegible on white) and differ in colour AND marker AND
-%   linestyle, because in this benchmark curves genuinely coincide: with
-%   DEFLAT_RECYCLE_K = 0 the two_level_krylov iteration counts are bit-identical
-%   to two_level_gaussian, and two_level_sjlt is within one iteration of both.
+%   Rows 1-8 are the Okabe-Ito colourblind-safe palette (yellow dropped --
+%   illegible on white); rows 9-10 extend it because the registry outgrew eight
+%   solvers.  They differ in colour AND marker AND linestyle, because in this
+%   benchmark curves genuinely coincide: with DEFLAT_RECYCLE_K = 0 the
+%   two_level_krylov iteration counts are bit-identical to two_level_gaussian,
+%   and two_level_sjlt is within one iteration of both.
+%
+%   EXTENDING is safe by construction.  The palette size enters only as
+%   mod(s-1, nb) and floor((s-1)/nb), both of which are unchanged for s <= 8 when
+%   nb grows, so appending rows leaves every existing curve's style bit-identical
+%   and only affects solvers past the eighth.
 %
 %   LINEWIDTH decreases monotonically down the table.  Curves are drawn in
 %   registry order, so a later thin line lands on top of an earlier thick one
 %   and coincident curves render as concentric bands instead of one erasing the
 %   others.  Staggered markers (see plot_solver_curves) separate them further.
 %
-%   Beyond eight the table cycles: colours advance one step out of phase with
-%   markers, so the repeat period is 8*7 rather than 8.
+%   Beyond ten the table cycles: colours advance one step out of phase with
+%   markers, so the repeat period is 10*8 rather than 10.
 %
 %   See also: plot_solver_curves, mark_coincident_curves.
 
@@ -34,11 +40,17 @@ function sty = solver_style_table(n)
               0.80 0.47 0.65;    % reddish purple
               0.90 0.62 0.00;    % orange
               0.34 0.71 0.91;    % sky blue
-              0.60 0.60 0.60];   % grey
-    markers    = {'o', 's', '^', 'd', 'v', 'p', 'h', '>'};
-    linestyles = {'-', '--', '-.', '-', '--', '-.', ':', ':'};
-    linewidths = [2.2 2.0 1.9 1.8 1.6 1.5 1.4 1.1];
-    markersizes = [5 5 5 6 6 6 6 6];
+              0.60 0.60 0.60;    % grey
+              0.45 0.16 0.51;    % violet     (extension, see note above)
+              0.40 0.50 0.15];   % olive      (extension)
+    markers    = {'o', 's', '^', 'd', 'v', 'p', 'h', '>', '<', '*'};
+    % Only four line styles exist, so rows must repeat one; row 10 takes ':' and
+    % not '--' because two_level_krylov lands there and coincides EXACTLY with
+    % two_level_gaussian (row 6) and near-exactly with two_level_sjlt (row 5) --
+    % that trio has to differ in colour, marker AND line style to stay readable.
+    linestyles = {'-', '--', '-.', '-', '--', '-.', ':', ':', '-', ':'};
+    linewidths = [2.2 2.0 1.9 1.8 1.6 1.5 1.4 1.1 1.0 0.9];
+    markersizes = [5 5 5 6 6 6 6 6 6 6];
 
     nb = size(colors, 1);
     sty = repmat(struct('color', [0 0 0], 'marker', 'o', 'linestyle', '-', ...

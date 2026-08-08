@@ -8,6 +8,7 @@ function write_case_figures(run_dir, stats, opts)
 %       all_solvers_comparison.png      every solver overlaid
 %       relative_step_to_step_change.png
 %       accuracy.png
+%       lowrank_bound.png               only when the run has the GMRES arm
 %
 %   STATS follows the contract in load_benchmark_stats, so run_benchmark (live)
 %   and replot_benchmark (from CSV) produce byte-comparable figures.
@@ -26,6 +27,8 @@ function write_case_figures(run_dir, stats, opts)
     write_comparison_figure(run_dir, stats, tax, opts);
     write_coupling_change_figure(run_dir, stats, tax, opts);
     write_accuracy_figure(run_dir, stats, tax, opts);
+    % No-ops (and writes nothing) for results directories with no GMRES arm.
+    write_lowrank_bound_figure(run_dir, stats, opts);
 end
 
 %==========================================================================
@@ -45,7 +48,7 @@ function write_per_solver_figures(run_dir, stats, tax, keys, labels, opts)
         yl = ylim(ax);
         ylim(ax, [yl(1) * 0.98, yl(2) * 1.02]);
         xlabel(ax, 't');
-        ylabel(ax, 'MINRES iterations');
+        ylabel(ax, 'Krylov iterations');
         title(ax, sprintf('%s  |  %s', stats.case_name, solver_short_label(keys{s})), ...
               'Interpreter', 'none', 'FontSize', opts.titlefontsize, ...
               'FontWeight', 'bold');
@@ -62,7 +65,7 @@ function write_comparison_figure(run_dir, stats, tax, opts)
     tl = tiledlayout(fh, 1, 1, 'Padding', 'compact', 'TileSpacing', 'compact');
     ax = nexttile(tl);
     [h, legLabels] = plot_solver_curves(ax, tax, stats, 't', opts);
-    title(tl, sprintf('%s: MINRES iterations, all solvers', stats.case_name), ...
+    title(tl, sprintf('%s: Krylov iterations, all solvers', stats.case_name), ...
           'Interpreter', 'none', 'FontWeight', 'bold', ...
           'FontSize', opts.titlefontsize);
     place_solver_legend(tl, h, legLabels, opts);
@@ -118,7 +121,7 @@ function write_accuracy_figure(run_dir, stats, tax, opts)
     end
     if ~isempty(rr)
         y{end+1}   = rr;
-        lab{end+1} = sprintf('%s: MINRES relative residual', lastShort);
+        lab{end+1} = sprintf('%s: relative residual', lastShort);
         sty{end+1} = '-';
     end
     if isfield(stats, 'backslash_relres')

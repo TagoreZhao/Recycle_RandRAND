@@ -47,5 +47,7 @@ function [h, legLabels] = plot_solver_curves(ax, xax, stats, xlab, opts)
     set(ax, 'YScale', 'log');
     grid(ax, 'on');
     if ~isempty(xlab), xlabel(ax, xlab); end
-    ylabel(ax, 'MINRES iterations');
+    % 'Krylov', not 'MINRES': the registry now mixes MINRES arms with the GMRES
+    % low-rank arm, which cannot be MINRES (its preconditioner is indefinite).
+    ylabel(ax, 'Krylov iterations');
 end

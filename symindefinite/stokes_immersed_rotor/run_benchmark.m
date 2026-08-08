@@ -8,12 +8,25 @@
 % (define_solver_list): the unpreconditioned solve, the SPD block-diagonal
 % "block Jacobi" preconditioner, incomplete-LDL, the EXACT LDL factor of step 1
 % frozen for the whole sequence (exact_ldl_frozen), the two-level deflation family
-% (L^-T P L^-1, with exact / gaussian / sjlt / polynomial coarse spaces), and the
-% Krylov-recycling variant two_level_krylov.
+% (L^-T P L^-1, with exact / gaussian / sjlt / polynomial coarse spaces), the
+% Krylov-recycling variant two_level_krylov, and one GMRES arm
+% (gmres_exact_inv_frozen) that tests the low-rank finite-termination bound.
 % Method knobs and per-preconditioner refresh cadences are set in the params
 % block below.  Add a preconditioner by appending one struct to
 % define_solver_list.m — CSV columns, plots and the summary table pick it up
 % automatically.
+%
+% Low-rank finite termination (gmres_exact_inv_frozen).  The only non-MINRES arm, and
+% it cannot be MINRES: its preconditioner is the exact SIGNED inverse of the step-1
+% KKT matrix, which is indefinite.  Since K_n - K_1 is symmetric of rank 2*rank(C_n -
+% C_1) <= 2*nC, the left-preconditioned operator K_1^-1 K_n is the IDENTITY plus a
+% rank-r update, whose minimal polynomial has degree <= r+1 -- so unrestarted GMRES
+% must terminate in at most 2*nC + 1 iterations (41 for bar_rotating, ~89 for the
+% disks, and exactly 1 for disk_static where the coupling never moves).  This is a
+% theorem, not a tuning knob: lowrank_bound.png plots the arm against 2*nC(n)+1 per
+% case and states on the figure whether the claim held.  exact_ldl_frozen is the
+% controlled contrast -- the SAME frozen factor, SPD-ified (M = |K_1|) so MINRES can
+% use it at all, which costs the clean I + low-rank structure.
 %
 % Krylov recycling (two_level_krylov).  Consecutive KKT systems differ only through
 % the moving coupling block C(t_n), so the directions MINRES converged slowly on at
@@ -29,7 +42,7 @@
 %   all_results.csv, speedup_summary.csv, paper_summary_table.csv,
 %   run_config.{mat,json}, summary_plots/, iteration_vs_timestep/, and a
 %   per-case subdir with per-solver iteration CSV+PNG, all_solvers_comparison,
-%   relative_step_to_step_change and accuracy plots.
+%   relative_step_to_step_change, accuracy and lowrank_bound plots.
 %
 % NOTE: this benchmark intentionally departs from the suite's SPD contract.
 % The PCG/ICHOL/AMG/deflation zoo (solve_deflate_M_P, RAND_EIGS) does NOT apply
@@ -71,6 +84,12 @@ params.DEFLAT_RECYCLE_K    = 0;        % # ILDL-preconditioned residuals recycle
                                         % previous step into two_level_krylov's coarse space
 params.ILDL_MODE           = 'nofill';  % incomplete-LDL pattern: 'nofill' | 'droptol'
 params.ILDL_DROPTOL        = 1e-3;      % drop tolerance when ILDL_MODE = 'droptol'
+params.GMRES_MAXIT         = 300;       % iteration cap for gmres_exact_inv_frozen.
+                                        % Full (unrestarted) GMRES, so this is a cap
+                                        % on TOTAL iterations and on the Krylov basis
+                                        % it stores.  It must stay above the predicted
+                                        % 2*nC+1 (41 for the bar, ~89 for the disks) or
+                                        % the arm reports the budget, not the claim.
 
 params.solvers     = define_solver_list(params);   % MINRES solver/preconditioner registry
 

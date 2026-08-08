@@ -54,7 +54,7 @@ function write_all_cases_comparison(out_dir, all_stats, opts)
 
     tl.XLabel.String    = 'time step n';
     tl.XLabel.FontSize  = opts.labelfontsize;
-    tl.YLabel.String    = 'MINRES iterations';
+    tl.YLabel.String    = 'Krylov iterations';
     tl.YLabel.FontSize  = opts.labelfontsize;
     place_solver_legend(tl, h, legLabels, opts);
 
@@ -62,7 +62,7 @@ function write_all_cases_comparison(out_dir, all_stats, opts)
     if isfield(all_stats{1}, 'geometry') && ~isempty(all_stats{1}.geometry)
         geom = all_stats{1}.geometry;
     end
-    title(tl, sprintf('MINRES iterations vs time step (%s)', geom), ...
+    title(tl, sprintf('Krylov iterations vs time step (%s)', geom), ...
           'Interpreter', 'none', 'FontWeight', 'bold', ...
           'FontSize', opts.titlefontsize);
 

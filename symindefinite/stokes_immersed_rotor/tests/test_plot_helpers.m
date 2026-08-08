@@ -22,7 +22,7 @@ fprintf('=== test_plot_helpers ===\n');
 
 KEYS = {'minres_unprec'; 'block_jacobi'; 'ildl_nofill'; 'exact_ldl_frozen'; ...
         'two_level_sjlt'; 'two_level_gaussian'; 'two_level_polynomial'; ...
-        'two_level_exact'; 'two_level_krylov'};
+        'two_level_exact'; 'gmres_exact_inv_frozen'; 'two_level_krylov'};
 nK = numel(KEYS);
 
 %% ------------------------------------------------- solver_short_label ----
@@ -33,7 +33,8 @@ short = solver_short_label(KEYS);
     isequal(short, {'unpreconditioned'; 'block Jacobi'; 'ILDL (no-fill)'; ...
                     'exact LDL (frozen)'; '2-level: sjlt V'; ...
                     '2-level: gaussian V'; '2-level: polynomial V'; ...
-                    '2-level: exact V'; '2-level: gauss V + recycling'}));
+                    '2-level: exact V'; 'GMRES: exact K_1^{-1}'; ...
+                    '2-level: gauss V + recycling'}));
 
 % T2  labels must be distinguishable, or the legend is useless.
 [np, nf] = chk(np, nf, 'T2  short labels are pairwise unique', ...
@@ -71,9 +72,12 @@ for i = 1:nK
 end
 [np, nf] = chk(np, nf, 'T7  no two styles share colour AND marker', ~dup);
 
-% T8  the trio that genuinely coincides (sjlt=5, gaussian=6, krylov=9) must
-%     differ in all three attributes, not just one.
-trio = [5 6 9];
+% T8  the trio that genuinely coincides (sjlt=5, gaussian=6, krylov=10) must
+%     differ in all three attributes, not just one.  krylov sits at 10, not 9,
+%     since gmres_exact_inv_frozen is registered ahead of it (deliberately: the
+%     LAST registry entry owns accuracy.png and the relres/solver_err_last CSV
+%     columns, which must keep tracking two_level_krylov).
+trio = [5 6 10];
 ok = true;
 for a = 1:3
     for b = a+1:3
@@ -264,6 +268,27 @@ nline = @(st) accuracy_line_count(fullfile(tmp, 'acc'), st, optsK);
 [np, nf] = chk(np, nf, 'T25 live and CSV stats give the same accuracy curves', ...
     ~isfield(liveShape, 'relres') && ~isfield(csvShape, 'solver_relres') && ...
     nline(liveShape) == nline(csvShape) && nline(liveShape) == 4);
+
+%% --------------------------------------------- lowrank bound figure ----
+% T26 a results directory written before the GMRES arm existed must replot
+%     without it -- the guard is what lets replot_benchmark stay usable on the
+%     committed runs.
+lrdir = fullfile(tmp, 'lowrank');
+[np, nf] = chk(np, nf, 'T26 no GMRES arm -> figure skipped, nothing written', ...
+    ~write_lowrank_bound_figure(lrdir, back{1}, benchmark_fig_defaults()) && ...
+    isempty(dir(fullfile(lrdir, 'lowrank_bound.png'))));
+
+% T27 with the arm present it draws the claim: the iteration curve, the 2nC+1
+%     bound, and the SPD-ified MINRES contrast.
+lrst = back{1};
+lrst.solver_keys = [lrst.solver_keys(:); {'exact_ldl_frozen'; 'gmres_exact_inv_frozen'}];
+ns5  = numel(lrst.nC);
+lrst.solver_its.exact_ldl_frozen       = (60:10:60+10*(ns5-1))';
+lrst.solver_its.gmres_exact_inv_frozen = repmat(31, ns5, 1);   % nC = 20 -> bound 41
+okfig = write_lowrank_bound_figure(lrdir, lrst, benchmark_fig_defaults());
+d = dir(fullfile(lrdir, 'lowrank_bound.png'));
+[np, nf] = chk(np, nf, 'T27 GMRES arm present -> lowrank_bound.png written', ...
+    okfig && ~isempty(d) && d.bytes > 10e3);
 
 %% ------------------------------------------------------------ summary ----
 fprintf('\n%d passed, %d FAILED\n', np, nf);

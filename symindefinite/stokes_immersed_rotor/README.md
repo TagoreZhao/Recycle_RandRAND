@@ -285,15 +285,16 @@ around it.
 ## 7. Solver and preconditioner
 
 Each step is solved by **backslash** ($\mathcal{K}\backslash b$, sparse LU) for
-the ground truth (and to advance the state), and by **MINRES for every entry of
-the solver registry** so the preconditioners are compared on identical systems.
-The baseline registry is:
+the ground truth (and to advance the state), and by **one Krylov solve per entry
+of the solver registry** so the preconditioners are compared on identical
+systems. Every entry is MINRES except `gmres_exact_inv_frozen`, whose
+preconditioner is indefinite by construction. The baseline registry is:
 
 1. **MINRES, unpreconditioned**;
 2. **MINRES with an SPD block-diagonal preconditioner** $P$ (defined below);
 
-plus the incomplete-LDL, frozen-exact-LDL and two-level deflation families
-described next.
+plus the incomplete-LDL, frozen-exact-LDL, low-rank GMRES and two-level
+deflation families described next.
 
 The preconditioner is
 
@@ -338,6 +339,34 @@ SPD `report/solve_deflate_M_P` scheme (ICHOL→ILDL, PCG→MINRES):
   Krylov-recycling arms are trying to reach cheaply, not a competitor to them. On
   `disk_static` ($\mathcal K$ constant) it stays at 2 forever, which is the control
   that proves the freeze itself is sound (`test_exact_ldl_frozen`).
+
+- **GMRES on the exact frozen inverse (`gmres_exact_inv_frozen`)** — the only
+  non-MINRES arm, and it cannot be MINRES. `exact_ldl_frozen` above has to
+  *SPD-ify* the frozen factor ($M=|\mathcal K_1|$) because MINRES demands an SPD
+  preconditioner, and what MINRES then sees is $\mathrm{sign}(D_1)$ plus the
+  low-rank update. GMRES carries no such constraint, so this arm uses
+  $\mathcal K_1^{-1}$ **signed and verbatim**. Left-preconditioning gives
+
+  ```math
+  \mathcal K_1^{-1}\mathcal K_n \;=\; I \;+\; \mathcal K_1^{-1}\big(\mathcal K_n-\mathcal K_1\big),
+  ```
+
+  an **identity plus a rank-$r$ update** with $r = 2\,\mathrm{rank}(\Delta C)\le 2n_C$.
+  Its minimal polynomial has degree $\le r+1$, so **unrestarted** GMRES must
+  terminate in at most $2n_C+1$ iterations — 41 for `bar_rotating` ($n_C=20$),
+  $\approx 89$ for the disks, and exactly **1** for `disk_static`, where
+  $\Delta C\equiv 0$ makes the preconditioned operator the identity. This is a
+  theorem rather than a tuning knob: `lowrank_bound.png` plots the arm against
+  $2n_C(t_n)+1$ per case and states on the figure whether the claim held. Counts
+  *below* the line mean $\Delta C$ was rank deficient at that step, not that the
+  bound is wrong. The restart must stay off (`[]`) — restarting discards the
+  Krylov space the argument rests on — and `GMRES_MAXIT` (default 300) must stay
+  above $2n_C+1$ or the arm reports its budget instead of the claim. Verified by
+  `tests/test_gmres_lowrank.m`, which pins the bound on a synthetic KKT sequence
+  of known update rank, on the extracted operator pair, and pins the scalar
+  iteration-count contract the engine requires (MATLAB's `gmres` returns a 1×2
+  `[outer inner]`). Measured against `exact_ldl_frozen` on the *same* frozen
+  factor, the gap is the price of MINRES's SPD requirement.
 
 - **Two-level deflation (`two_level_*`)** — the standard split form
   $B=L^{-\top}PL^{-1}$ ($L=C$): MINRES on $\hat A$ with the indefinite deflation
@@ -448,6 +477,7 @@ benchmark_final/
     all_solvers_comparison.png
     relative_step_to_step_change.png    per-step ||ΔC||_F/||C||_F
     accuracy.png                        error vs backslash + constraint residual
+    lowrank_bound.png                   GMRES iterations vs the 2n_C+1 bound
     coefficient_movie/                  (stress case only)
 ```
 
@@ -456,11 +486,12 @@ stress case, 2 steps).
 
 ### Redrawing the figures without re-solving
 
-A full run is 3 cases × 60 steps × 9 MINRES solves, so figure changes do not go
+A full run is 3 cases × 60 steps × 10 Krylov solves, so figure changes do not go
 through `run_benchmark`. The plotting lives in its own files
 (`plot_solver_curves`, `place_solver_legend`, `save_benchmark_figure`,
 `write_case_figures`, `write_iteration_vs_timestep`,
-`write_all_cases_comparison`) and both drivers call the same code, so
+`write_all_cases_comparison`, `write_lowrank_bound_figure`) and both drivers call
+the same code, so
 
 ```matlab
 replot_benchmark                              % benchmark_no_krylov_recycle
@@ -476,8 +507,10 @@ pixel-identical by `tests/test_plot_helpers.m`, which also covers the legend
 layout, the per-solver style table and the CSV round-trip.
 
 `accuracy.png` shows the error-vs-backslash curve only for runs whose CSV has
-the `solver_err_last` column; older results directories get the MINRES relative
-residual instead, and the figure says so.
+the `solver_err_last` column; older results directories get the relative
+residual instead, and the figure says so. `lowrank_bound.png` is drawn only for
+runs that carry the `gmres_exact_inv_frozen` column; results directories written
+before that arm existed replot without it.
 
 ### Extracting example operators
 
