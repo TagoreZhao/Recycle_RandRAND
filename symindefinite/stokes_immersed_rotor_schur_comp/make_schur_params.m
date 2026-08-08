@@ -24,7 +24,7 @@ function params = make_schur_params()
     params = struct();
 
     % --- Discretization (identical to the sibling KKT benchmark) ------------
-    params.h0    = 0.05;
+    params.h0    = 0.03;
     params.dt    = 0.02;
     params.Tstep = 61;                  % => 60 solves
 

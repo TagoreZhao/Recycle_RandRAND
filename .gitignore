@@ -3,6 +3,9 @@ symindefinite/stokes_immersed_rotor/convergence_out/
 symindefinite/stokes_immersed_rotor/benchmark_final/
 symindefinite/stokes_immersed_rotor/test_tentative_approx/
 symindefinite/stokes_immersed_rotor/output/
+# example KKT operators from extract_kkt_examples.m (top level only; the
+# committed benchmark_*/run_config.mat are one level deeper and unaffected)
+symindefinite/stokes_immersed_rotor/*.mat
 
 # linear_solves preconditioner test bed (regenerated on run)
 symindefinite/linear_solves/output/
@@ -31,3 +34,5 @@ symindefinite/stokes_immersed_rotor_schur_comp/schur_recycle/
 symindefinite/stokes_immersed_rotor_schur_comp/schur_recycle_smoke/
 symindefinite/stokes_immersed_rotor_schur_comp/output/
 symindefinite/stokes_immersed_rotor_schur_comp/cache/
+# example Schur operators from schur_extract_examples.m (~221 MB each at h0=0.03)
+symindefinite/stokes_immersed_rotor_schur_comp/*.mat

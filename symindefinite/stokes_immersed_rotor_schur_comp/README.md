@@ -314,6 +314,7 @@ comparisons.
 | `add_schur_paths.m`, `assert_local_helpers.m` | path bootstrap + shadowing guard |
 | `run_schur_spectrum.m` | exact spectra, mesh sweep, $\kappa_{\mathrm{defl}}(k)$ — **sets `sm_eig`** |
 | `run_schur_lowrank.m` | rank/confinement of the step-to-step update |
+| `schur_extract_examples.m` | saves $S(t_n)$ + RHS + ground truth at two steps as `.mat` examples (gitignored, **~211 MB each** at $h_0=0.03$) |
 | `write_schur_*.m` | CSVs and figures |
 | `replot_schur.m` | redraw all figures from the CSV, no re-solving |
 | `benchmark_fig_defaults.m`, `save_benchmark_figure.m`, `solver_style_table.m` | figure style (copied from the sibling; the style table keeps 12 colours so that adding arms back cannot silently wrap the palette) |
@@ -325,6 +326,27 @@ Since 11 filenames collide with the sibling's and `addpath` prepends by default,
 and `assert_local_helpers()` turns any future path-order slip into a hard error
 instead of silently mislabelled figures.
 
+### Example operators
+
+`schur_extract_examples.m` writes `schur_example_h0p03_step{01,09}.mat` holding
+`S`, `rhs_S`, `y_ref`, `keep` and `meta`. Two things a consumer needs to know:
+
+- **`S` has the pin index removed** (§1, trap 1). `keep` is the
+  $n_S^{\mathrm{full}}\times 1$ logical that maps back:
+  `y = zeros(meta.nS_full,1); y(keep) = y_ref; y(meta.pin_node) = meta.pin_val;`
+  The `st.recover` handle is deliberately *not* saved — it captures a
+  `decomposition` object and a dense $n_U\times n_S$ block.
+- **The twin in `../stokes_immersed_rotor/`** (`extract_kkt_examples.m`) saves the
+  $\mathcal K(t_n)$ these are the Schur complement of, at the same $h_0$ and the
+  same steps. Both `meta` structs carry `normK_fro`, `nnzK`, `norm_b`,
+  `normC_fro`, computed by two *independent* assembly implementations
+  (`schur_assemble_kkt` here, `build_stokes_sequence` there) marched
+  independently — they agree to the last digit, which cross-validates both paths.
+
+Steps 1 and 9 are chosen, not 1 and 30: the bar's point set is $\pi$-symmetric,
+so $C(\theta+\pi)=P\,C(\theta)$ exactly and steps 16/31 are near-permutations of
+step 1. See the $\theta$ table in `extract_kkt_examples.m`.
+
 ## 5. Running
 
 ```matlab
@@ -333,6 +355,7 @@ SMOKE_TEST = 1; run_schur_recycle      % 3 steps, one case
 run_schur_spectrum                     % run BEFORE trusting sm_eig
 run_schur_recycle                      % 3 cases x 60 steps -> schur_recycle/
 run_schur_lowrank
+schur_extract_examples                 % S(t_1), S(t_9) -> .mat  (~211 MB each)
 
 cd tests                               % all assertion-style scripts
 test_schur_correctness    % the gate: Schur solve + recovery == K\b

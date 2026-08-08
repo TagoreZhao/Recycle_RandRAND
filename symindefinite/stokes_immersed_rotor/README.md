@@ -479,6 +479,39 @@ layout, the per-solver style table and the CSV round-trip.
 the `solver_err_last` column; older results directories get the MINRES relative
 residual instead, and the figure says so.
 
+### Extracting example operators
+
+`extract_kkt_examples.m` saves $\mathcal K(t_n)$, its RHS, and the backslash
+ground truth at **two time steps**, for experiments that want the matrix without
+running the benchmark:
+
+```matlab
+extract_kkt_examples          % -> stokes_kkt_example_h0p03_step{01,09}.mat
+                              %    variables: A, b, x_ref, meta
+```
+
+The `(A, b, meta)` names match `symindefinite/linear_solves/extract_system.m`,
+so consumers of `stokes_kkt_system.mat` load these unchanged. The files are
+**gitignored and regenerable** (~1.4 MB each). All assembly is delegated to
+`build_stokes_sequence` — the script adds no new copy of the KKT assembly.
+
+Two choices in it are deliberate and non-obvious:
+
+- **$h_0 = 0.03$, not this folder's benchmark default of 0.05.** It matches
+  `make_schur_params.m`, so these artifacts and
+  `../stokes_immersed_rotor_schur_comp/schur_extract_examples.m`'s are the *same*
+  system in two algebraic forms — $S(t_n)$ is the Schur complement of this
+  $\mathcal K(t_n)$. Both `meta` structs carry a shared fingerprint
+  (`normK_fro`, `nnzK`, `norm_b`, `normC_fro`) so the two independent assembly
+  paths can be checked against each other; they agree to the last digit.
+- **Steps 1 and 9, not 1 and 30.** The bar's Lagrange-point set is symmetric
+  under a $\pi$ rotation, so $C(\theta+\pi) = P\,C(\theta)$ exactly for a
+  permutation $P$ — separation in $\theta$ only counts mod $\pi$. With
+  $\theta(n) = 11.8^\circ n$, step 9 is $85.6^\circ$ from step 1 (the maximum),
+  while steps 16 and 31 are within $3$–$6^\circ$ of a *permutation* of step 1 and
+  would be the worst possible partners. The script asserts
+  $\lVert C_9-C_1\rVert_F/\lVert C_1\rVert_F > 10^{-3}$ (measured: 1.41).
+
 ### Adding a preconditioner
 
 The solver set is the one extensibility seam. Append a struct to

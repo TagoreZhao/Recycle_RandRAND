@@ -36,7 +36,7 @@ rng(1);
 
 params = make_schur_params();
 snapshot_steps = [1 15 30];
-h0_list        = [0.10 0.07 0.05];
+h0_list        = [0.07 0.05 0.03];
 
 out_dir = fullfile(paths.outDir, 'spectrum');
 if ~exist(out_dir, 'dir'), mkdir(out_dir); end
