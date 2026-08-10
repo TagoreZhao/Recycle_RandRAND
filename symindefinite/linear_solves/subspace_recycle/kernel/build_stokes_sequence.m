@@ -24,15 +24,20 @@ function S = build_stokes_sequence(opts)
 %     .use_cache    load/save <kernel>/cache/seq_*.mat (default true).  A cache HIT
 %                   is validated by CONTENT, not by filename -- see below.
 %     .quiet        suppress progress printing (default false)
+%     .motion_params  struct forwarded to define_motion_list: .theta0, .Lb_frac,
+%                   .bar_pt_frac (see that file).  Defaults reproduce the
+%                   previous hardcoded geometry bit-for-bit.
 %
-%   THE CACHE IS CONTENT-VALIDATED.  The filename tag records only
-%   (case_name, h0, dt, nsteps), so it is blind to most of what defines the
-%   problem: Tstep/Tmax, nu, the channel box, Uin, and -- decisively -- the
-%   Lagrange-point layout, which lives inside define_motion_list.m as literals and
-%   therefore can never appear in a tag built from opts.  Editing the point spacing
-%   and re-running used to return the OLD sequence under the same name, silently.
-%   Every entry now stores S.fingerprint and every hit re-derives and compares it;
-%   a mismatch, or a legacy entry without one, warns and rebuilds.
+%   THE CACHE IS CONTENT-VALIDATED.  The filename tag records
+%   (case_name, h0, dt, nsteps) plus a suffix for any non-default motion_params,
+%   so it is still blind to much of what defines the problem: Tstep/Tmax, nu, the
+%   channel box, Uin, and the geometry literals that remain unparameterised (the
+%   disk radius, its 0.95*h0 spacing, the 0.95*rd clip, the max(8,...) floor).
+%   Editing one of those and re-running used to return the OLD sequence under the
+%   same name, silently.  Every entry therefore stores S.fingerprint and every hit
+%   re-derives and compares it; a mismatch, or a legacy entry without one, warns
+%   and rebuilds.  The tag suffix is an optimisation -- it keeps a parameter sweep
+%   from overwriting one file repeatedly -- not the correctness mechanism.
 %
 %   Output struct S:
 %     .K0 .Sel .Cblk{n}       the low-rank form (use seq_K(S,n) to materialize)
@@ -42,6 +47,8 @@ function S = build_stokes_sequence(opts)
 %     .n .nU .nP .nC .N       dimensions
 %     .h0 .dt .nu .nsteps .case_name .eps_stab
 %     .fingerprint            geometry identity of this sequence (see above)
+%     .motion_params          the resolved motion knobs (defaults filled in)
+%     .motion_meta            what the factory actually built (omega, Lb, gaps...)
 %     .msh .veldofs .velvals .pin_node
 %
 %   The benchmark advances the state with the DIRECT solution (not the iterative
@@ -63,6 +70,7 @@ function S = build_stokes_sequence(opts)
     verify    = getdef(opts, 'verify',    true);
     use_cache = getdef(opts, 'use_cache', true);
     quiet     = getdef(opts, 'quiet',     false);
+    motion_params = getdef(opts, 'motion_params', struct());
 
     p = add_recycle_paths();
 
@@ -71,13 +79,18 @@ function S = build_stokes_sequence(opts)
     % this prologue, and a clean cache hit must not pay for it.  Everything below
     % is a handful of arithmetic ops and two motion_fun evaluations.
     [geo, Uin] = channel_geometry(h0, dt, Tstep);
-    mcase      = motion_case(case_name, dt, geo);
+    [mcase, mparams, mtag] = motion_case(case_name, dt, geo, motion_params);
     nu         = mcase.nu;
     fp         = sequence_fingerprint(case_name, h0, dt, Tstep, nsteps, ...
-                                      geo, Uin, mcase);
+                                      geo, Uin, mcase, mparams);
 
     % ---- cache lookup ----------------------------------------------------
-    tag = sprintf('seq_%s_h%s_dt%s_n%d', case_name, num2str(h0), num2str(dt), nsteps);
+    % mtag is EMPTY whenever the motion knobs are at their defaults, so every
+    % pre-existing cache file keeps its name and hits cleanly; only non-default
+    % sweep points get a suffix, which stops a sweep from thrashing one filename
+    % through staleCache -> rebuild -> overwrite on every point.
+    tag = sprintf('seq_%s_h%s_dt%s_n%d%s', case_name, num2str(h0), num2str(dt), ...
+                  nsteps, mtag);
     tag = regexprep(tag, '[^\w]', '_');
     cacheFile = fullfile(p.cacheDir, [tag '.mat']);
     if use_cache && exist(cacheFile, 'file') == 2
@@ -93,6 +106,12 @@ function S = build_stokes_sequence(opts)
             why = fingerprint_reason(L.S.fingerprint, fp);
             if isempty(why)
                 S = L.S;
+                % A hit whose fingerprint matches IS the geometry these params
+                % generate, so stamping them on is truthful -- and necessary,
+                % since a legacy entry carries neither field and every consumer
+                % of a cached S would otherwise see them missing.
+                S.motion_params = mparams;
+                S.motion_meta   = mcase.motion_meta;
                 if ~quiet
                     fprintf(['[seq] loaded cached %s (n=%d, nC=%d, %d steps, ' ...
                              'geometry fingerprint OK)\n'], ...
@@ -102,11 +121,11 @@ function S = build_stokes_sequence(opts)
             end
             warning('build_stokes_sequence:staleCache', ...
                     ['cached %s was built from a different problem: %s.  The cache ' ...
-                     'tag records only (case_name, h0, dt, nsteps); the ' ...
-                     'Lagrange-point layout lives inside define_motion_list.m as ' ...
-                     'literals, and Tstep/nu/the channel box are fixed here, so ' ...
-                     'none of them can appear in a tag built from opts -- which is ' ...
-                     'why this is checked by content instead.  Rebuilding and ' ...
+                     'tag records (case_name, h0, dt, nsteps) plus non-default ' ...
+                     'motion_params; Tstep/nu/the channel box and the remaining ' ...
+                     'geometry literals inside define_motion_list.m still do not ' ...
+                     'appear in it -- which is why this is checked by content ' ...
+                     'instead.  Rebuilding and ' ...
                      'overwriting the file.  This is the intended response to ' ...
                      'editing the geometry; it is not a reason to delete the ' ...
                      'fingerprint.'], tag, why);
@@ -163,7 +182,9 @@ function S = build_stokes_sequence(opts)
     S.Tmax = dt * Tstep;
     S.eps_stab = eps_stab;  S.msh = msh;  S.veldofs = veldofs;
     S.velvals = velvals;  S.pin_node = pin_node;
-    S.fingerprint = fp;
+    S.fingerprint   = fp;
+    S.motion_params = mparams;
+    S.motion_meta   = mcase.motion_meta;
 
     u_prev = zeros(nU, 1);
     C_prev = [];
@@ -276,16 +297,19 @@ function [geo, Uin] = channel_geometry(h0, dt, Tstep)
 end
 
 %==========================================================================
-function mcase = motion_case(case_name, dt, geo)
+function [mcase, mparams, mtag] = motion_case(case_name, dt, geo, motion_params)
 %MOTION_CASE  Resolve case_name against define_motion_list and instantiate it.
-    cases = define_motion_list(dt);
+%   Also returns the RESOLVED motion params (defaults filled in) and this case's
+%   cache-tag suffix, which is '' unless a knob the case consumes is non-default.
+    [cases, mparams] = define_motion_list(dt, motion_params);
     idx   = find(cellfun(@(c) strcmp(c.name, case_name), cases), 1);
     assert(~isempty(idx), 'unknown case_name "%s"', case_name);
     mcase = cases{idx}.factory(geo);
+    mtag  = cases{idx}.params_tag;
 end
 
 %==========================================================================
-function fp = sequence_fingerprint(case_name, h0, dt, Tstep, nsteps, geo, Uin, mcase)
+function fp = sequence_fingerprint(case_name, h0, dt, Tstep, nsteps, geo, Uin, mcase, mparams)
 %SEQUENCE_FINGERPRINT  Content identity of the problem this call would build.
 %
 %   The Lagrange-point ARRAYS are the load-bearing part.  X is the OUTPUT of the
@@ -311,6 +335,11 @@ function fp = sequence_fingerprint(case_name, h0, dt, Tstep, nsteps, geo, Uin, m
     fp.is_stress = mcase.is_stress;
     fp.box       = [geo.x1, geo.x2, geo.y1, geo.y2];
     fp.Uin       = Uin;
+    % Recorded for forensics only.  Deliberately NOT added to fingerprint_reason's
+    % compared lists: every one of the pre-existing cache entries lacks the field,
+    % so comparing it would declare all of them stale on the first run.  The knobs
+    % are already caught through X/V, and now also through the cache tag.
+    fp.motion_params = mparams;
 
     m1 = mcase.motion_fun(dt);
     m2 = mcase.motion_fun(nsteps * dt);

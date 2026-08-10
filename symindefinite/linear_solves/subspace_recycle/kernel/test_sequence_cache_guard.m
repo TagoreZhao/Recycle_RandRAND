@@ -1,9 +1,10 @@
 % TEST_SEQUENCE_CACHE_GUARD  The cache cannot silently return a different problem.
 %
-% The cache filename records only (case_name, h0, dt, nsteps).  Everything else
-% that defines the problem -- Tstep/Tmax, nu, the channel box, and above all the
-% Lagrange-point layout, which lives inside define_motion_list.m as literals -- is
-% invisible to it.  Editing the point spacing and re-running therefore used to
+% The cache filename records (case_name, h0, dt, nsteps) plus a suffix for any
+% non-default motion_params.  Everything else that defines the problem --
+% Tstep/Tmax, nu, the channel box, and the geometry literals that remain
+% unparameterised inside define_motion_list.m (disk radius, its 0.95*h0 spacing,
+% the 0.95*rd clip, the max(8,...) floor) -- is still invisible to it.  Editing the point spacing and re-running therefore used to
 % return the OLD sequence under the same name, with no warning, which is how an
 % entire benchmark run was once spent measuring a problem that no longer existed.
 %
