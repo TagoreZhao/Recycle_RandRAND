@@ -16,7 +16,7 @@ function params = make_woodbury_params()
     params = struct();
 
     % --- Discretization (identical to the parent KKT benchmark) -------------
-    params.h0    = 0.05;
+    params.h0    = 0.03;
     params.dt    = 0.02;
     params.Tstep = 61;                  % => 60 solves; also sets Tmax = dt*Tstep
 
