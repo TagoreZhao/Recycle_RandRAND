@@ -9,9 +9,23 @@ function [x, info] = woodbury_solve(ctx, S, n, b)
 %       x   = K_1^{-1}b - Y0 * ( Cap \ (U' K_1^{-1} b) )
 %
 %   This is EXACT in exact arithmetic -- it is not an approximation or a
-%   preconditioner.  What it is exposed to in floating point is the conditioning
-%   of Cap, which is why cond(Cap) is reported alongside every solve: the forward
-%   error tracks it, and ||dC||_F/||C||_F reaches O(1) over a rotor revolution.
+%   preconditioner.  Any error it makes is therefore an error of EVALUATION.
+%
+%   THIS IS A NAIVE EVALUATION, ON PURPOSE.  The expression is written out in the
+%   order given above with no defensive measures: Cap is NOT symmetrized, C^{-1} is
+%   formed explicitly, U and Y0 are not orthogonalized, there is no iterative
+%   refinement, and the final subtraction x = z - Y0*w is unguarded -- including
+%   when dC is exactly zero and the correction is provably zero, which is computed
+%   and rounded like any other step.  A "stabilized" variant would make the reported
+%   accuracy a property of the defenses rather than of the problem, and the point of
+%   this study is the problem.  See tests/test_stress_metrics.m for the two
+%   constructed systems on which this same evaluation loses every digit.
+%
+%   WHAT IT IS EXPOSED TO is cancellation, in two places, both reported per step:
+%     info.cancel_cap  (||C^{-1}|| + ||U|| ||Y0||) / ||Cap||   -- the small matrix
+%     info.cancel_sub  (||z|| + ||Y0 w||) / ||z - Y0 w||       -- the subtraction
+%   Neither is visible in cond(K_n).  cond(Cap) is reported too, but the measured
+%   error follows the cancellation factors, not the condition numbers.
 %
 %   COST.  nC backsolves for Y_dC = K_1^{-1}dC, plus ONE for the right-hand side.
 %   The Sel half of Y0 is time-independent and was solved once in
@@ -23,29 +37,25 @@ function [x, info] = woodbury_solve(ctx, S, n, b)
 %   diagonal scalings, one permutation gather/scatter) is then paid once instead
 %   of twice.
 %
-%   WHY BOTH OFF-DIAGONAL BLOCKS ARE COMPUTED.  dC'*YSel and Sel'*Y_dC are
-%   transposes of one another in exact arithmetic, so one could be obtained from
-%   the other for free.  They are computed INDEPENDENTLY (two small GEMMs) so that
-%   info.cap_symres is a real check on the wiring rather than a tautology --
-%   an asymmetry there means Y_dC, YSel or Sel is wrong, not that rounding
-%   occurred.
-%
-%   THE dC == 0 BRANCH IS ALGEBRA, NOT AN OPTIMIZATION.  When the coupling does
-%   not move (disk_static, and trivially at n == ref), dC is exactly zero, so
-%   U B U' = 0 * Sel' + Sel * 0' = 0 and therefore K_n == K_1 EXACTLY.  The
-%   correction term is provably zero, so it is skipped rather than computed and
-%   rounded -- which is what lets the falsification control assert bit-for-bit
-%   agreement with the uncorrected frozen inverse.  Cap and its diagnostics are
-%   still formed, so the reported cost and conditioning stay representative of
-%   the general path.
+%   WHY Cap IS NOT SYMMETRIZED.  Cap = C^{-1} + U'Y0 is symmetric in exact
+%   arithmetic, so (Cap + Cap')/2 would be free accuracy -- and is exactly the kind
+%   of quiet repair this study must not make.  The asymmetry is MEASURED instead
+%   (info.cap_symres) and left in place.  It doubles as a wiring check: the two
+%   off-diagonal blocks dC'*YSel and Sel'*Y_dC are formed by independent sums, so a
+%   symres above rounding level means Y_dC, YSel or Sel is wrong.
 %
 %   A NOTE ON BIT-EXACTNESS.  Because the RHS rides along in the batched
 %   multi-column apply, K_1^{-1}b as computed here can differ in its last bits
 %   from a standalone single-column solve of b -- different BLAS blocking, same
-%   answer to ~1e-15.  So "the correction was skipped" must be asserted via
-%   info.correction_norm == 0, not by comparing against a separate frozen solve.
+%   answer to ~1e-15.  Likewise, since the dC == 0 case is no longer special-cased,
+%   info.correction_norm there is ~1e-16 rather than exactly 0.
+%
+%   NORMS.  The tall factors U and Y0 are ntot-by-2nC, so cancel_cap uses Frobenius
+%   norms (O(n*nC)) rather than spectral ones (an svd per step).  The two differ by
+%   at most sqrt(2nC) ~ 9, immaterial for a quantity read against 1 or 1e14.
 %
 %   INFO: .cap_cond .cap_smin .cap_smax .cap_rcond .cap_symres .Cap
+%         .cancel_cap .cancel_sub .rho          the cancellation diagnostics
 %         .dC_normF .dC_rel .dC_is_zero .correction_norm .correction_rel
 %         .n_backsolves .n_backsolves_rhs
 %         .t_solve (all of it) .t_diag (the svd/rcond part) .t_net (the rest)
@@ -60,26 +70,28 @@ function [x, info] = woodbury_solve(ctx, S, n, b)
     % --- The only per-step backsolves: nC update columns + the RHS, batched -
     Z    = woodbury_apply_ref(ctx, [full(dC), b]);
     Y_dC = Z(:, 1:nC);
-    y    = Z(:, nC + 1);
+    z    = Z(:, nC + 1);                             % z = A^{-1} b
 
-    % --- Cap = B + U'Y0, assembled blockwise ------------------------------
-    %   [ dC'Y_dC        dC'YSel + I ]
-    %   [ Sel'Y_dC + I   Sel'YSel    ]   <- lower right is precomputed & constant
-    Ic  = eye(nC);
-    G11 = full(dC' * Y_dC);
-    G12 = full(dC' * ctx.YSel);
-    G21 = full(ctx.Sel' * Y_dC);
-    Cap_raw = [G11, G12 + Ic; G21 + Ic, ctx.SelYSel];
+    % --- The identity, written out -----------------------------------------
+    Zc   = zeros(nC);
+    Ic   = eye(nC);
+    U    = [full(dC), full(ctx.Sel)];                % U, and V = U'
+    Y0   = [Y_dC, ctx.YSel];                         % Y0 = A^{-1} U
+    Cinv = [Zc, Ic; Ic, Zc];                         % C^{-1} = C = B, exactly
 
-    cap_symres = norm(Cap_raw - Cap_raw', 'fro') / ...
-                 max(norm(Cap_raw, 'fro'), eps);
-    Cap = (Cap_raw + Cap_raw') / 2;
+    Cap = Cinv + U' * Y0;                            % Cap = C^{-1} + V A^{-1} U
+    w   = Cap \ (U' * z);
+    Yw  = Y0 * w;
+    x   = z - Yw;                                    % the subtraction, unguarded
 
-    % --- Conditioning: free at 2nC <= 88, and the metric the error tracks --
-    % Timed separately: svd+rcond are DIAGNOSTICS a production solve would not
-    % run, so folding them into the headline cost would bias the comparison
-    % against the method.  info.t_diag lets the caller subtract them.
+    % --- Diagnostics: measured, never fed back ------------------------------
+    % Timed separately: a production solve would run none of these, so folding
+    % them into the headline cost would bias the comparison against the method.
+    % info.t_diag lets the caller subtract them.
     t_diag_0 = tic;
+
+    cap_symres = norm(Cap - Cap', 'fro') / max(norm(Cap, 'fro'), eps);
+
     sv       = svd(Cap);
     cap_smax = sv(1);
     cap_smin = sv(end);
@@ -89,7 +101,14 @@ function [x, info] = woodbury_solve(ctx, S, n, b)
         cap_cond = Inf;
     end
     cap_rcond = rcond(Cap);
-    t_diag    = toc(t_diag_0);
+
+    % The two places digits can go missing.  Both are 1 when nothing cancels.
+    cancel_cap = (norm(Cinv, 'fro') + norm(U, 'fro') * norm(Y0, 'fro')) / ...
+                 max(norm(Cap, 'fro'), realmin);
+    cancel_sub = (norm(z) + norm(Yw)) / max(norm(x), realmin);
+    rho        = norm(z) / max(norm(x), realmin);
+
+    t_diag = toc(t_diag_0);
 
     if ~isfinite(cap_rcond) || cap_rcond < eps
         warning('woodbury_solve:singularCapacitance', ...
@@ -98,14 +117,7 @@ function [x, info] = woodbury_solve(ctx, S, n, b)
                  'the update, not a tolerance to be raised.'], n, cap_rcond);
     end
 
-    % --- The solve ---------------------------------------------------------
     dC_is_zero = (nnz(dC) == 0);
-    if dC_is_zero
-        x = y;                                       % K_n == K_1 exactly
-    else
-        w = Cap \ [full(dC' * y); full(ctx.Sel' * y)];
-        x = y - Y_dC * w(1:nC) - ctx.YSel * w(nC+1:end);
-    end
 
     info                  = struct();
     info.cap_cond         = cap_cond;
@@ -114,13 +126,16 @@ function [x, info] = woodbury_solve(ctx, S, n, b)
     info.cap_rcond        = cap_rcond;
     info.cap_symres       = cap_symres;
     info.Cap              = Cap;
+    info.cancel_cap       = cancel_cap;
+    info.cancel_sub       = cancel_sub;
+    info.rho              = rho;
     info.dC_normF         = norm(dC, 'fro');
     info.dC_rel           = info.dC_normF / max(ctx.Cblk_ref_normF, eps);
     info.dC_is_zero       = dC_is_zero;
-    % How far the Woodbury term actually moved the iterate.  Exactly 0 when the
-    % dC == 0 branch is taken -- that is the sharp form of the falsification
-    % control, and it is a property of THIS solve, not of two BLAS paths agreeing.
-    info.correction_norm  = norm(x - y);
+    % How far the Woodbury term actually moved the iterate.  When dC == 0 the
+    % correction is provably zero but is still computed, so this lands at ~1e-16
+    % rather than exactly 0 -- see the naive-evaluation note above.
+    info.correction_norm  = norm(Yw);
     info.correction_rel   = info.correction_norm / max(norm(x), eps);
     info.n_backsolves     = size(dC, 2);             % operator update: nC
     info.n_backsolves_rhs = 1;                       % the right-hand side

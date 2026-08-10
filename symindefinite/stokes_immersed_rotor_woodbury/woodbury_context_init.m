@@ -21,10 +21,15 @@ function ctx = woodbury_context_init(S)
 %
 %       YSel = K_1^{-1} Sel,
 %
-%   and with it the whole lower-right block Sel' K_1^{-1} Sel of Cap, are constant
-%   across the sequence.  They are solved here, once, for nC backsolves.  Only the
-%   dC half is rebuilt per step.  (lowrank_update_basis uses the same ctx.YSel
-%   trick for its span computation.)
+%   is constant across the sequence.  It is solved here, once, for nC backsolves;
+%   only the dC half is rebuilt per step.  That is a saving in BACKSOLVES, which is
+%   what the cost claim is about, and it changes no arithmetic: the same frozen
+%   factors are applied to the same columns either way.  (lowrank_update_basis uses
+%   the same ctx.YSel trick for its span computation.)
+%
+%   ctx.SelYSel = Sel' YSel is cached as well, but woodbury_solve no longer reads
+%   it -- it forms all of U'Y0 in one GEMM, naively.  It is kept for the tests that
+%   check the cached block against a fresh product.
 %
 %   THE FACTORS ARE STORED RAW, NOT AS A decomposition OBJECT, and applied by
 %   woodbury_apply_ref -- which is 27x faster on this operator.  See that file for
@@ -73,7 +78,9 @@ function ctx = woodbury_context_init(S)
     % nC backsolves, paid once: Sel does not move, so neither does K_1^{-1}Sel.
     YSel    = woodbury_apply_ref(ctx, full(S.Sel));
     SelYSel = full(S.Sel' * YSel);
-    SelYSel = (SelYSel + SelYSel') / 2;     % symmetric by construction
+    % NOT symmetrized, though it is symmetric in exact arithmetic: woodbury_solve
+    % is a naive evaluation and must not be handed pre-repaired inputs.  Its
+    % asymmetry is what info.cap_symres measures.
 
     ctx.YSel               = YSel;
     ctx.SelYSel            = SelYSel;

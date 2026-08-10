@@ -17,6 +17,9 @@ function run_all_tests()
         'test_capacitance', ...
         'test_static_control', ...      % the falsification control
         'test_context_reuse', ...
+        'test_stress_metrics', ...      % the method CAN fail: two constructed systems
+        'test_woodbury_naive', ...      % ...and the kernel that fails there is this one
+        'test_recursive_growth', ...    % chaining updates does not compound
         'test_engine_smoke'};
 
     nfail   = 0;
