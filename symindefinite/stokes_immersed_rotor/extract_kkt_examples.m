@@ -87,10 +87,12 @@ Sq = build_stokes_sequence(struct( ...
         'use_cache', false, ...       % see the Tmax guard below
         'quiet',     false));
 
-% Tstep is NOT part of build_stokes_sequence's cache key, but it sets Tmax and
-% hence omega -- so a stale cache at the same (case, h0, dt, nsteps) would
-% silently hand back a DIFFERENT geometry.  Guard on the stored Tmax, which
-% survives a cache hit.
+% Tstep is still NOT part of build_stokes_sequence's cache key, but the kernel now
+% validates a geometry FINGERPRINT on every cache hit, so the "stale cache hands
+% back a different geometry" hazard these lines were written for is handled
+% upstream.  They are kept as this study's own caller-side contract: the cost is
+% microseconds and the failure they guard against is silent.  The last one was
+% never about staleness at all.
 assert(abs(Sq.Tmax - DT * TSTEP) < 1e-12, ...
        'Tmax mismatch: got %.6g, expected %.6g (stale cache?)', Sq.Tmax, DT*TSTEP);
 assert(abs(Sq.h0 - H0) < 1e-12, 'h0 mismatch: got %.6g, expected %.6g', Sq.h0, H0);

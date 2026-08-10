@@ -147,8 +147,9 @@ only rebuilds the ILDL:
 
 ```
 subspace_recycle/
-├── kernel/          shared helpers + 6 unit-test files (40 checks)
+├── kernel/          shared helpers + 7 unit-test files (47 checks)
 │   ├── build_stokes_sequence.m   the KKT sequence in low-rank form
+│   ├── assert_coupling_feasible.m  refuses an exactly-singular coupling block
 │   ├── seq_K.m / seq_dCblk.m     K_n = K0 + Cblk_n Sel' + Sel Cblk_n'
 │   ├── ildl_coordinate_map.m     explicit C + pivot/permutation drift
 │   ├── transport_V.m             the H1 repair
@@ -156,7 +157,7 @@ subspace_recycle/
 │   ├── two_level_it.m            instrumented split solve (+ true_res, cond(E))
 │   ├── orth_trunc.m              rank-truncating orthonormalization
 │   ├── matvec_budget.m           work in matvec-equivalents
-│   └── run_kernel_tests.m        runs all six
+│   └── run_kernel_tests.m        runs all seven
 └── diagnosis/       + output/ (gitignored)
     ├── run_pivot_sensitivity.m   H1 gate: operator fixed, only the ILDL varies
     ├── run_mode_localization.m   H6 gate: are the targets physical?
@@ -168,7 +169,7 @@ subspace_recycle/
 ## How to run
 
 ```matlab
-cd kernel;    run_kernel_tests          % 40 checks, ~4 s — run this first
+cd kernel;    run_kernel_tests          % 47 checks, ~5 s — run this first
 cd ../diagnosis
 run_pivot_sensitivity                   % H1 gate
 run_mode_localization                   % H6 gate
@@ -183,8 +184,16 @@ benchmark scale (h0 = 0.05, n = 5840, k = 500, 60 steps, 3 cases) set
 `eig` in fast mode, which gives the *whole* spectrum and makes the interlacing
 check exact; FULL switches to `eigs` and skips it.
 
-Sequences are cached under `kernel/cache/` (gitignored). Delete it after
-changing `build_stokes_sequence`.
+Sequences are cached under `kernel/cache/` (gitignored). **Manual deletion is no
+longer the mechanism**: the filename tag records only
+`(case_name, h0, dt, nsteps)`, so it is blind to `Tstep`/`Tmax`, `nu`, the channel
+box, and above all the Lagrange-point layout, which lives inside
+`define_motion_list.m` as literals and can never appear in a tag built from
+`opts`. Every entry therefore stores a geometry `fingerprint`, and every cache hit
+re-derives and compares it; a mismatch — or a legacy entry that has none — warns
+and rebuilds. Editing the geometry and re-running is safe. Changing the *assembly*
+without changing the geometry still is not: that is what `use_cache = false` is
+for.
 
 ## Validation
 

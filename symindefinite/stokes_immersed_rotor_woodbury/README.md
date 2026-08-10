@@ -435,7 +435,7 @@ $4\times10^{15}$, and the error follows $\mathrm{cancel}_S$.
 | `write_woodbury_figures.m` | every figure, **from the CSVs only** |
 | `replot_woodbury.m` | redraw without re-solving |
 | `woodbury_fig_defaults.m`, `save_woodbury_figure.m`, `woodbury_style_table.m` | figure style (renamed local copies) |
-| `tests/run_all_tests.m` + 8 scripts | 84 assertions, ~18 s |
+| `tests/run_all_tests.m` + 8 scripts | 85 assertions, ~18 s |
 | `woodbury_direct/` | the committed run: 3 CSVs + 19 figures (this README embeds them) |
 
 Reused rather than copied: `define_motion_list.m` from the sibling benchmark by path, and

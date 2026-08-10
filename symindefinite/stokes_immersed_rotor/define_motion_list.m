@@ -49,7 +49,7 @@ function S = make_bar_rotating(geo)
     Lb    = 0.35 * (geo.y2 - geo.y1);          % bar half-length
     nrev  = 2;                                  % revolutions over [0,Tmax]
     omega = 2 * pi * nrev / geo.Tmax;
-    nb    = max(8, ceil(2 * Lb / (1.5 * geo.h0)));
+    nb    = max(8, ceil(2 * Lb / (0.6 * geo.h0)));
     s     = linspace(-Lb, Lb, nb)';            % arc-parameter along the bar
 
     S.nu        = 1.0;
@@ -102,8 +102,28 @@ end
 
 function Pts = disk_sample(rd, h0)
 %DISK_SAMPLE  Interior sample points of a disk on a Cartesian grid clipped to
-% the disk, spaced ~1.5*h0 so the coupling rows stay linearly independent.
-    sp = 1.5 * h0;
+% the disk.
+%
+% THE SPACING IS A HARD CONSTRAINT, NOT A PREFERENCE.  The disk is sampled on a
+% 2-D grid, so halving the spacing quadruples the constraint count while the
+% velocity DOFs available to constrain are capped by the fluid mesh.  Measured at
+% h0 = 0.03 (nC / touched DOFs / cond(Cap) for the step 1 -> 5 update):
+%
+%     1.50h  138 / 334 / 3.6e2      the original calibration
+%     1.00h  308 / 392 / 8.5e3
+%     0.95h  340 / 392 / 1.6e9      <- here: ill conditioned, still well posed
+%     0.90h  370 / 382 / 2.9e35     passes the row count but cond(K_1) = 4e20
+%     0.86h  416 / 402              refused: more rows than DOFs, K exactly singular
+%
+% 0.95*h0 is chosen to drive cond(Cap) hard while leaving cond(K_1) at 7.9e6,
+% essentially its shipped 7.4e6 -- so the OPERATOR stays as well posed as before
+% and only the low-rank update degrades.  Below ~0.9*h0 the operator itself goes,
+% which is a different (and uninteresting) failure.  assert_coupling_feasible
+% enforces the floor; note it is a row count and cannot see the 0.90h case.
+%
+% The bar is a 1-D sample and has a much lower floor, so make_bar_rotating uses
+% its own factor.
+    sp = 0.95 * h0;
     g  = -rd:sp:rd;
     [GX, GY] = meshgrid(g, g);
     inside = (GX.^2 + GY.^2) <= (0.95 * rd)^2;

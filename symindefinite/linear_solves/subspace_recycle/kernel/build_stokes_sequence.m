@@ -21,8 +21,18 @@ function S = build_stokes_sequence(opts)
 %     .Tstep        benchmark Tstep, sets Tmax = dt*Tstep for the motion (default 61)
 %     .nsteps       # steps to build (default Tstep-1)
 %     .verify       assert the low-rank identity per step (default true)
-%     .use_cache    load/save <kernel>/cache/seq_*.mat (default true)
+%     .use_cache    load/save <kernel>/cache/seq_*.mat (default true).  A cache HIT
+%                   is validated by CONTENT, not by filename -- see below.
 %     .quiet        suppress progress printing (default false)
+%
+%   THE CACHE IS CONTENT-VALIDATED.  The filename tag records only
+%   (case_name, h0, dt, nsteps), so it is blind to most of what defines the
+%   problem: Tstep/Tmax, nu, the channel box, Uin, and -- decisively -- the
+%   Lagrange-point layout, which lives inside define_motion_list.m as literals and
+%   therefore can never appear in a tag built from opts.  Editing the point spacing
+%   and re-running used to return the OLD sequence under the same name, silently.
+%   Every entry now stores S.fingerprint and every hit re-derives and compares it;
+%   a mismatch, or a legacy entry without one, warns and rebuilds.
 %
 %   Output struct S:
 %     .K0 .Sel .Cblk{n}       the low-rank form (use seq_K(S,n) to materialize)
@@ -31,12 +41,14 @@ function S = build_stokes_sequence(opts)
 %     .coupling_change(n)     ||C_n - C_{n-1}||_F / ||C_{n-1}||_F
 %     .n .nU .nP .nC .N       dimensions
 %     .h0 .dt .nu .nsteps .case_name .eps_stab
+%     .fingerprint            geometry identity of this sequence (see above)
 %     .msh .veldofs .velvals .pin_node
 %
 %   The benchmark advances the state with the DIRECT solution (not the iterative
 %   one), so the RHS sequence here is identical to the benchmark's.
 %
-%   See also: seq_K, seq_dCblk, src.stokes.solve_stokes_immersed,
+%   See also: seq_K, seq_dCblk, assert_coupling_feasible,
+%             src.stokes.solve_stokes_immersed,
 %             symindefinite/linear_solves/extract_system.
 
     import src.discretization.*
@@ -52,33 +64,60 @@ function S = build_stokes_sequence(opts)
     use_cache = getdef(opts, 'use_cache', true);
     quiet     = getdef(opts, 'quiet',     false);
 
-    % ---- cache lookup ----------------------------------------------------
     p = add_recycle_paths();
+
+    % ---- the cheap half of the setup, needed to fingerprint BEFORE the cache --
+    % The mesh is deliberately NOT built here: it is the only expensive call in
+    % this prologue, and a clean cache hit must not pay for it.  Everything below
+    % is a handful of arithmetic ops and two motion_fun evaluations.
+    [geo, Uin] = channel_geometry(h0, dt, Tstep);
+    mcase      = motion_case(case_name, dt, geo);
+    nu         = mcase.nu;
+    fp         = sequence_fingerprint(case_name, h0, dt, Tstep, nsteps, ...
+                                      geo, Uin, mcase);
+
+    % ---- cache lookup ----------------------------------------------------
     tag = sprintf('seq_%s_h%s_dt%s_n%d', case_name, num2str(h0), num2str(dt), nsteps);
     tag = regexprep(tag, '[^\w]', '_');
     cacheFile = fullfile(p.cacheDir, [tag '.mat']);
     if use_cache && exist(cacheFile, 'file') == 2
         L = load(cacheFile, 'S');
-        S = L.S;
-        if ~quiet
-            fprintf('[seq] loaded cached %s (n=%d, nC=%d, %d steps)\n', ...
-                    tag, S.n, S.nC, S.nsteps);
+        if ~isfield(L.S, 'fingerprint')
+            warning('build_stokes_sequence:cacheNoFingerprint', ...
+                    ['cached %s predates the geometry fingerprint, so it cannot ' ...
+                     'be checked against the current define_motion_list.m.  ' ...
+                     'Rebuilding rather than trusting it: at this tag a file built ' ...
+                     'from a different point layout is indistinguishable from a ' ...
+                     'correct one.  Happens once per cache file.'], tag);
+        else
+            why = fingerprint_reason(L.S.fingerprint, fp);
+            if isempty(why)
+                S = L.S;
+                if ~quiet
+                    fprintf(['[seq] loaded cached %s (n=%d, nC=%d, %d steps, ' ...
+                             'geometry fingerprint OK)\n'], ...
+                            tag, S.n, S.nC, S.nsteps);
+                end
+                return;
+            end
+            warning('build_stokes_sequence:staleCache', ...
+                    ['cached %s was built from a different problem: %s.  The cache ' ...
+                     'tag records only (case_name, h0, dt, nsteps); the ' ...
+                     'Lagrange-point layout lives inside define_motion_list.m as ' ...
+                     'literals, and Tstep/nu/the channel box are fixed here, so ' ...
+                     'none of them can appear in a tag built from opts -- which is ' ...
+                     'why this is checked by content instead.  Rebuilding and ' ...
+                     'overwriting the file.  This is the intended response to ' ...
+                     'editing the geometry; it is not a reason to delete the ' ...
+                     'fingerprint.'], tag, why);
         end
-        return;
+        clear L
     end
 
-    % ---- geometry / mesh / time-independent fluid blocks ------------------
-    x1 = 0; x2 = 4; y1 = 0; y2 = 1;  Lyc = y2 - y1;  Uin = 1.0;
-    msh = build_channel_mesh_pde(h0, x1, x2, y1, y2, {'rect_right'});
+    % ---- mesh / time-independent fluid blocks -----------------------------
+    Lyc = geo.y2 - geo.y1;
+    msh = build_channel_mesh_pde(h0, geo.x1, geo.x2, geo.y1, geo.y2, {'rect_right'});
     N   = msh.N;  nU = 2*N;  nP = N;
-
-    geo = struct('x1', x1, 'x2', x2, 'y1', y1, 'y2', y2, ...
-                 'xc', (x1+x2)/2, 'yc', (y1+y2)/2, 'h0', h0, 'Tmax', dt * Tstep);
-    cases = define_motion_list(dt);
-    idx   = find(cellfun(@(c) strcmp(c.name, case_name), cases), 1);
-    assert(~isempty(idx), 'unknown case_name "%s"', case_name);
-    mcase = cases{idx}.factory(geo);
-    nu    = mcase.nu;
 
     blk      = assemble_stokes_blocks(msh);
     Avel     = blk.M2/dt + nu*blk.A2;   Avel = (Avel + Avel')/2;
@@ -124,6 +163,7 @@ function S = build_stokes_sequence(opts)
     S.Tmax = dt * Tstep;
     S.eps_stab = eps_stab;  S.msh = msh;  S.veldofs = veldofs;
     S.velvals = velvals;  S.pin_node = pin_node;
+    S.fingerprint = fp;
 
     u_prev = zeros(nU, 1);
     C_prev = [];
@@ -134,6 +174,13 @@ function S = build_stokes_sequence(opts)
         assert(nCn == nC, ['nC changed from %d to %d at step %d: the fixed ' ...
                'selector Sel (and the whole low-rank form) assumes a constant ' ...
                'multiplier count.'], nC, nCn, n);
+
+        % Cheap (O(nnz(C))) structural gate: more constraint rows than free
+        % velocity DOFs to constrain makes K exactly singular.  Checked EVERY
+        % step, not once: nC is asserted constant above but the number of DOFs
+        % the points touch is not, and a translating body can drift into a
+        % region where its points cluster into fewer elements.
+        touched = assert_coupling_feasible(C, veldofs, n, case_name);
 
         K = [ Avel  ,  blk.B'         ,  C'        ; ...
               blk.B , -eps_stab*blk.L ,  Z(nP, nC) ; ...
@@ -154,7 +201,34 @@ function S = build_stokes_sequence(opts)
                    '(rel err %.3e): K_n = K0 + Cblk*Sel'' + Sel*Cblk'''], n, rel);
         end
 
+        if ~all(isfinite(b))
+            % Reachable only via a non-finite gvec, i.e. a motion_fun returning
+            % NaN/Inf velocities (e.g. omega = 2*pi*nrev/Tmax with Tmax == 0):
+            % the guard below keeps u_prev finite, so b's velocity block cannot
+            % be the culprit.
+            error('build_stokes_sequence:nonfiniteRhs', ...
+                  ['step %d: the assembled RHS holds %d non-finite entries.  The ' ...
+                   'previous step''s solution is checked, so the prescribed ' ...
+                   'rigid-body velocity from motion_fun is the remaining source ' ...
+                   '-- check Tmax and the motion parameters for "%s".'], ...
+                  n, nnz(~isfinite(b)), case_name);
+        end
+
         xref = K \ b;
+        if ~all(isfinite(xref))
+            error('build_stokes_sequence:nonfiniteSolution', ...
+                  ['step %d: K \\ b returned %d non-finite entries out of %d.  ' ...
+                   'K_n is singular or numerically so; MATLAB reports that as a ' ...
+                   'warning only, and this value would otherwise be stored as ' ...
+                   'xref and fed straight into u_prev, poisoning the RHS of all ' ...
+                   '%d remaining steps and every quantity derived from them.  ' ...
+                   'Failing here rather than %d steps downstream.  A rank-deficient ' ...
+                   'coupling block is the usual cause -- assert_coupling_feasible ' ...
+                   'names that case directly when it is visible from the row ' ...
+                   'count alone.'], ...
+                  n, nnz(~isfinite(xref)), numel(xref), nsteps - n, nsteps - n);
+        end
+
         S.b{n} = b;  S.xref{n} = xref;  S.Ccpl{n} = C;  S.g{n} = gvec;
         S.Xpts{n} = mot.X;              % Lagrange-point positions (mode localization)
         if ~isempty(C_prev) && nnz(C_prev) > 0
@@ -164,15 +238,140 @@ function S = build_stokes_sequence(opts)
         u_prev = xref(1:nU);
 
         if ~quiet && (mod(n, max(1, round(nsteps/5))) == 0 || n == nsteps)
-            fprintf('  [seq %s] step %3d/%d  nC=%d  ||b||=%.2e  dC=%.3f\n', ...
-                    case_name, n, nsteps, nC, norm(b), S.coupling_change(n));
+            fprintf(['  [seq %s] step %3d/%d  nC=%d  touched=%d  ||b||=%.2e  ' ...
+                     'dC=%.3f\n'], ...
+                    case_name, n, nsteps, nC, touched, norm(b), S.coupling_change(n));
         end
     end
 
     if use_cache
+        % Independent of the per-step guard on purpose: a cached NaN sequence
+        % outlives the session that produced it and is then loaded silently by
+        % every study sharing this kernel, so weakening the guard above must not
+        % be able to produce a corrupt file.  Only b and xref are checked --
+        % S.coupling_change(1) is NaN by design.
+        bad = find(cellfun(@(v) ~all(isfinite(v)), S.xref(:)) | ...
+                   cellfun(@(v) ~all(isfinite(v)), S.b(:)), 1);
+        if ~isempty(bad)
+            error('build_stokes_sequence:refuseToCacheNonfinite', ...
+                  ['refusing to write %s: step %d holds a non-finite b or xref.  ' ...
+                   'The per-step guard should have stopped this already; this gate ' ...
+                   'is deliberately redundant so that a corrupt sequence can never ' ...
+                   'reach disk.'], cacheFile, bad);
+        end
         save(cacheFile, 'S', '-v7.3');
         if ~quiet, fprintf('[seq] cached %s\n', cacheFile); end
     end
+end
+
+%==========================================================================
+function [geo, Uin] = channel_geometry(h0, dt, Tstep)
+%CHANNEL_GEOMETRY  The fixed channel and the motion's time horizon.
+%   Hoisted out of the build path so the fingerprint can see it: the box and Uin
+%   are hardcoded, hence invisible to a cache tag built from opts.
+    x1 = 0; x2 = 4; y1 = 0; y2 = 1;
+    Uin = 1.0;
+    geo = struct('x1', x1, 'x2', x2, 'y1', y1, 'y2', y2, ...
+                 'xc', (x1+x2)/2, 'yc', (y1+y2)/2, 'h0', h0, 'Tmax', dt * Tstep);
+end
+
+%==========================================================================
+function mcase = motion_case(case_name, dt, geo)
+%MOTION_CASE  Resolve case_name against define_motion_list and instantiate it.
+    cases = define_motion_list(dt);
+    idx   = find(cellfun(@(c) strcmp(c.name, case_name), cases), 1);
+    assert(~isempty(idx), 'unknown case_name "%s"', case_name);
+    mcase = cases{idx}.factory(geo);
+end
+
+%==========================================================================
+function fp = sequence_fingerprint(case_name, h0, dt, Tstep, nsteps, geo, Uin, mcase)
+%SEQUENCE_FINGERPRINT  Content identity of the problem this call would build.
+%
+%   The Lagrange-point ARRAYS are the load-bearing part.  X is the OUTPUT of the
+%   geometry, so storing it catches every knob that shapes the body -- point
+%   spacing, bar half-length, revolutions, disk radius, start position, the
+%   0.95*rd clip, the max(8,...) floor -- without naming any of them, which
+%   matters because they are hardcoded literals inside define_motion_list.m and
+%   no parameter list could ever enumerate them.
+%
+%   Two time samples, not one: an edit that changes only the later trajectory
+%   (e.g. the translation speed) leaves t = dt invariant.  V as well as X,
+%   because disk_static's velocity could change with X fixed.
+%
+%   ~30 KB against 16 MB cache files.
+    fp = struct();
+    fp.case_name = case_name;
+    fp.h0        = h0;
+    fp.dt        = dt;
+    fp.Tstep     = Tstep;
+    fp.Tmax      = geo.Tmax;
+    fp.nsteps    = nsteps;
+    fp.nu        = mcase.nu;
+    fp.is_stress = mcase.is_stress;
+    fp.box       = [geo.x1, geo.x2, geo.y1, geo.y2];
+    fp.Uin       = Uin;
+
+    m1 = mcase.motion_fun(dt);
+    m2 = mcase.motion_fun(nsteps * dt);
+    fp.X_first = m1.X;  fp.V_first = m1.V;
+    fp.X_last  = m2.X;  fp.V_last  = m2.V;
+end
+
+%==========================================================================
+function why = fingerprint_reason(fpc, fpn)
+%FINGERPRINT_REASON  '' if the two fingerprints agree, else a printable reason.
+%
+%   Arrays are compared by SIZE first -- that is the unambiguous signal when the
+%   point layout changed -- then by value with a RELATIVE tolerance.  Not isequal:
+%   bar_points runs through sin/cos/linspace, and a one-ulp change from a MATLAB
+%   upgrade must not invalidate the whole cache.  1e-12 sits ~4 orders above ulp
+%   and ~10 orders below any meaningful geometry edit.
+    TOL = 1e-12;
+    why = '';
+
+    if ~strcmp(fpc.case_name, fpn.case_name)
+        why = sprintf('case_name %s -> %s', fpc.case_name, fpn.case_name);
+        return;
+    end
+
+    scalars = {'h0','dt','Tstep','Tmax','nsteps','nu','is_stress','Uin'};
+    for k = 1:numel(scalars)
+        f = scalars{k};
+        if ~isfield(fpc, f) || ~isequal(fpc.(f), fpn.(f))
+            why = sprintf('%s %g -> %g', f, getfield_or_nan(fpc, f), fpn.(f));
+            return;
+        end
+    end
+
+    arrays = {'box','X_first','V_first','X_last','V_last'};
+    for k = 1:numel(arrays)
+        f = arrays{k};
+        if ~isfield(fpc, f)
+            why = sprintf('%s missing from the cached fingerprint', f);
+            return;
+        end
+        A = fpc.(f);  B = fpn.(f);
+        if ~isequal(size(A), size(B))
+            why = sprintf('%s is %s, cached is %s', f, sizestr(B), sizestr(A));
+            return;
+        end
+        d = max(abs(A(:) - B(:)));
+        if d > TOL * max(1, max(abs(B(:))))
+            why = sprintf('%s differs by %.3e', f, d);
+            return;
+        end
+    end
+end
+
+%==========================================================================
+function v = getfield_or_nan(s, f)
+    if isfield(s, f), v = double(s.(f)); else, v = NaN; end
+end
+
+%==========================================================================
+function s = sizestr(A)
+    s = sprintf('%dx%d', size(A, 1), size(A, 2));
 end
 
 %==========================================================================

@@ -37,7 +37,7 @@ function params = make_woodbury_params()
     % at every step.  That identity is the premise of the entire method, so it is
     % verified on every run rather than trusted from the cache metadata.
     params.verify_lowrank = true;
-    params.use_cache      = true;       % kernel/cache/, already gitignored
+    params.use_cache      = false;       % kernel/cache/, already gitignored
 
     % --- Timing -------------------------------------------------------------
     % Wall clock is a headline metric here (both arms are direct solves, so

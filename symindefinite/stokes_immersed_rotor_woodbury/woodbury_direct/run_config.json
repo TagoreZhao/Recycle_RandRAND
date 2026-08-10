@@ -9,7 +9,7 @@
   ],
   "max_steps": [],
   "verify_lowrank": true,
-  "use_cache": true,
+  "use_cache": false,
   "TIME_REPEATS": 3,
   "COMPUTE_SPECTRUM": false,
   "SPECTRUM_TOL": 1E-8

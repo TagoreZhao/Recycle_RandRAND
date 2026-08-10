@@ -150,6 +150,31 @@ fprintf('  %d cols: applier %.3f ms | decomposition %.3f ms | speedup %.1fx\n', 
     sprintf('T9  applier >= 2x faster than decomposition (%.1fx)', tdec/tk), ...
     tk < 0.5 * tdec);
 
+% --- T10  a singular K_1 is diagnosed as such, not as a broken applier ----
+% Both faults show up as "woodbury_apply_ref does not invert K_1".  They want
+% opposite responses -- fix the geometry vs fix the applier -- and the generic
+% message once sent a debugging session sixty steps upstream of the real defect.
+% Zeroing a symmetric row/column pair keeps K_1 symmetric, so ldl still applies
+% and the failure is genuinely singularity rather than a rejected factorization.
+% The row must be a PRESSURE dof: Cblk writes into the velocity rows and Sel into
+% the multiplier rows, so only there is K_1 = K0 + Cblk*Sel' + Sel*Cblk' certain
+% to inherit the zero row exactly.
+Sbad = S;
+prow = S.nU + 1;
+Sbad.K0(prow, :) = 0;
+Sbad.K0(:, prow) = 0;
+ws = warning('off', 'all');
+try
+    woodbury_context_init(Sbad);
+    id = '(no error raised)';
+catch ME
+    id = ME.identifier;
+end
+warning(ws);
+[np, nf] = chk(np, nf, ...
+    sprintf('T10 singular K_1 named as such, not as a bad applier (%s)', id), ...
+    strcmp(id, 'woodbury_context_init:singularReference'));
+
 fprintf('\n  %d passed, %d failed\n', np, nf);
 if nf > 0
     error('test_context_reuse:fail', '%d assertion(s) failed.', nf);

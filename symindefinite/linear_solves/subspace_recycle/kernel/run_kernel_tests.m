@@ -19,7 +19,8 @@ setappdata(0, 'srk_tests', { ...
     'test_transport_V', ...
     'test_lowrank_update_basis', ...
     'test_two_level_it', ...
-    'test_matvec_budget'});
+    'test_matvec_budget', ...
+    'test_sequence_cache_guard'});
 setappdata(0, 'srk_i', 0);
 setappdata(0, 'srk_fail', {});
 setappdata(0, 'srk_log', {});
@@ -29,15 +30,21 @@ setappdata(0, 'srk_dir', fileparts(mfilename('fullpath')));
 while getappdata(0, 'srk_i') < numel(getappdata(0, 'srk_tests'))
     setappdata(0, 'srk_i', getappdata(0, 'srk_i') + 1);
     names = getappdata(0, 'srk_tests');
-    nm    = names{getappdata(0, 'srk_i')};
+    % The name goes to appdata BEFORE the run, not into a local: the test script
+    % opens with `clear`, which wipes this workspace, so a local `nm` is gone by
+    % the time the catch block below needs it -- and the handler would then fail
+    % with "Unrecognized function or variable 'nm'", hiding the real failure and
+    % aborting the remaining tests.  A test runner must survive a failing test.
+    setappdata(0, 'srk_nm', names{getappdata(0, 'srk_i')});
     setappdata(0, 'srk_tic', tic);
     try
         out = evalc(sprintf('run(''%s'')', ...
-                    fullfile(getappdata(0, 'srk_dir'), [nm '.m'])));
+                    fullfile(getappdata(0, 'srk_dir'), ...
+                             [getappdata(0, 'srk_nm') '.m'])));
     catch ME
         out = sprintf('  FAILED: %s', ME.message);
         f = getappdata(0, 'srk_fail');
-        f{end+1} = sprintf('%s: %s', nm, ME.message); %#ok<SAGROW>
+        f{end+1} = sprintf('%s: %s', getappdata(0, 'srk_nm'), ME.message); %#ok<SAGROW>
         setappdata(0, 'srk_fail', f);
     end
     L = getappdata(0, 'srk_log');   L{end+1} = out;              %#ok<SAGROW>
@@ -65,6 +72,6 @@ else
 end
 fprintf('==================================================================\n');
 
-for f = {'srk_tests','srk_i','srk_fail','srk_dir','srk_log','srk_sec','srk_tic'}
+for f = {'srk_tests','srk_i','srk_fail','srk_dir','srk_log','srk_sec','srk_tic','srk_nm'}
     if isappdata(0, f{1}), rmappdata(0, f{1}); end
 end
