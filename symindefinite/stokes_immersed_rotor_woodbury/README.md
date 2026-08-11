@@ -488,9 +488,13 @@ fewer solves.
 
 ## 7. Limits, and what this does not claim
 
-- **The reference is hard-frozen at step 1, with no refresh knob**, by design — a cadence
+- **The reference is frozen at one step, with no refresh knob**, by design — a cadence
   parameter would let the question "can one factorization serve the sequence?" be answered by
-  refactorizing. Re-anchoring is a follow-up study, not a parameter.
+  refactorizing. Re-anchoring *mid-run* is a follow-up study, not a parameter.
+  `woodbury_context_init(S, ref)` moves *which* single step is frozen and is not that knob:
+  there is still exactly one factorization per context and no path that refactorizes, pinned by
+  `test_reference_index` R7. It exists because the question in the next bullet needs a control
+  that holds the targets fixed and varies only the anchor — see `run_woodbury_bad_reference`.
 - **The stability regime is not probed by the physical sequence.** Both amplifiers stay
   benign here — $\kappa(\mathrm{Cap}) \le 4\times10^2$ and the cancellation ratio
   $\rho \le 1.01$ — so this run shows the bad regime is *not reached* over a 60-step,
@@ -498,10 +502,14 @@ fewer solves.
   reached. §4.1 reaches it deliberately with an adversarial right-hand side ($\rho = 327$,
   error $1.6\times10^{-12}$), and §4.3 reaches total failure on constructed systems. A finer
   mesh, more multipliers, a stiffer coupling, or a reference whose conditioning differs from
-  the target's could find it for real. If `woodbury_err` ever climbs, the natural next steps
-  are one sweep of iterative refinement (cheap: the correction is already exact to
-  $10^{-14}$) or a re-anchored reference — **neither is implemented**, deliberately, since
-  either would make the reported accuracy the repair's rather than the problem's.
+  the target's could find it for real. **`run_woodbury_bad_reference` takes the last of those
+  routes** — it drives $\mathrm{condest}(K_{\mathrm{ref}})$ from $7\times10^6$ to $10^{14}$ at
+  fixed $n_C = 78$ by placing the rotor bar a calibrated fraction of a degree off the mesh
+  axis, and reads the result against reference-free metrics plus a manufactured-RHS arm whose
+  answer is exact by construction. If `woodbury_err` ever climbs, the natural next steps are
+  one sweep of iterative refinement (cheap: the correction is already exact to $10^{-14}$) or a
+  re-anchored reference — **neither is implemented**, deliberately, since either would make the
+  reported accuracy the repair's rather than the problem's.
 - **The error's dependence on $\kappa(\mathrm{Cap})$ is unresolved** — it varies too little
   across this run (3.4×) to fit an exponent, and $\mathrm{cancel}_{\mathrm{cap}}$ moves with
   it, so the two cannot be separated on this data (§4.4 caveat). Only the $\rho$ dependence is

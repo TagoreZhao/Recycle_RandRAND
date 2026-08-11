@@ -6,10 +6,14 @@ function params = make_woodbury_params()
 %   benchmark's run_benchmark.m so this study's numbers sit next to that study's
 %   iteration counts without a size caveat.  ntot = 2N + N + nC ~ 5120.
 %
-%   THE REFERENCE IS HARD-FROZEN AT STEP 1 and there is deliberately no refresh
-%   cadence knob.  The question this study asks is "can ONE exact factorization of
-%   A_1 serve the whole sequence?", and a refresh knob would let that question be
-%   answered by refactorizing.  Re-anchoring is a follow-up study, not a parameter.
+%   THE REFERENCE DEFAULTS TO STEP 1 and there is deliberately no refresh cadence
+%   knob.  The question this study asks is "can ONE exact factorization of A_1
+%   serve the whole sequence?", and a refresh knob would let that question be
+%   answered by refactorizing.  Re-anchoring mid-run is a follow-up study, not a
+%   parameter -- and woodbury_context_init's optional REF is not that knob: it
+%   moves WHICH single step is frozen, still one factorization per context, so
+%   that run_woodbury_bad_reference can hold the targets fixed and vary only the
+%   anchor.  test_reference_index R7 pins the cost invariant against it.
 %
 %   See also: solve_woodbury_sequence, run_woodbury_benchmark, woodbury_solve.
 

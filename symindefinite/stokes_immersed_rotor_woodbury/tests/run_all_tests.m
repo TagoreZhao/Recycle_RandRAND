@@ -13,10 +13,12 @@ function run_all_tests()
     thisFileDir = fileparts(mfilename('fullpath'));
 
     tests = { ...
+        'test_mask_error', ...          % pure, instant: what counts as reportable
         'test_woodbury_identity', ...   % the gate
         'test_capacitance', ...
         'test_static_control', ...      % the falsification control
         'test_context_reuse', ...
+        'test_reference_index', ...     % ...and the anchor may be any step
         'test_stress_metrics', ...      % the method CAN fail: two constructed systems
         'test_woodbury_naive', ...      % ...and the kernel that fails there is this one
         'test_recursive_growth', ...    % chaining updates does not compound
