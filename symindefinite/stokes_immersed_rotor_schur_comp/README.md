@@ -36,7 +36,9 @@ $$
 where $p$ enforces $\nabla\!\cdot u = 0$, the multiplier $\lambda$ enforces
 $u = g$ on the immersed solid, and $C(t)$ — the barycentric interpolation onto
 the moving Lagrange points — is **the only block that changes with time**.
-$A_{\mathrm{vel}}$ is SPD and time-constant.
+$A_{\mathrm{vel}}$ is SPD and time-constant. In this benchmark the velocity
+Dirichlet DOFs are also fixed, so the symmetrically eliminated block
+$A=A_{\mathrm{vel,bc}}$ is time-constant as well.
 
 Writing $G = [\,B;\, C(t)\,]$ and $D = \mathrm{blkdiag}(\varepsilon L, 0)$, so
 that $K = \begin{bmatrix} A & G^{\top}\\ G & -D\end{bmatrix}$, elimination of the
@@ -50,8 +52,60 @@ S\,y \;=\; G A^{-1} b_1 - b_2 ,
 u = A^{-1}\!\left(b_1 - G^{\top} y\right).
 $$
 
+The sign and right-hand side follow directly from
+
+$$
+A u + G^{\top}y=b_1,
+\qquad
+G u-Dy=b_2:
+\qquad
+u=A^{-1}(b_1-G^{\top}y)
+$$
+
+and hence
+
+$$
+\left(D+GA^{-1}G^{\top}\right)y=GA^{-1}b_1-b_2.
+$$
+
 **$S$ is SPD.** The sign matters: $-(D + G A^{-1} G^{\top})$ is negative definite
 and `pcg` refuses it.
+
+### What actually changes, and what is frozen
+
+Expanding $G_n=[\,B;\,C_n\,]$ makes the update pattern explicit (before removal
+of the pressure-pin index):
+
+$$
+S_n=
+\begin{bmatrix}
+\varepsilon L+BA^{-1}B^{\top} & BA^{-1}C_n^{\top}\\
+C_nA^{-1}B^{\top} & C_nA^{-1}C_n^{\top}
+\end{bmatrix}.
+$$
+
+Thus “only $C_n$ changes” does **not** mean that only the lower-right block of
+$S_n$ is updated. It changes the full multiplier border: both pressure–multiplier
+cross blocks and the multiplier–multiplier block. Only the pressure–pressure
+block $\varepsilon L+BA^{-1}B^{\top}$ is constant.
+
+There are three distinct reuse lifecycles in the implementation:
+
+1. `ctx.dA` applies $A^{-1}$. It is built once and reused **exactly**, not as a
+   stale approximation, because $A=A_{\mathrm{vel,bc}}$ is constant. It is used
+   with the current $C_n$ to assemble the current $S_n$.
+2. The `chol` baseline freezes $\operatorname{chol}(S_1)$ and applies that same
+   factor as an approximation to $S_n^{-1}$ at every later step. This is the
+   inverse that becomes stale; it is not used to assemble $S_n$.
+3. The deflation arms freeze the step-1 basis $V_1$, but
+   `deflation_P_apply(V, S, ...)` rebuilds the small coarse matrix
+   $V_1^{\top}S_nV_1$ from the **current** $S_n$ on every step. The subspace is
+   stale while its Galerkin operator is current.
+
+This is therefore not the alternative pattern “freeze an inverse block and
+update only a $C$ block.” The underlying KKT model updates only $C_n$; the code
+then propagates that change through every affected block of the exact Schur
+complement, while separately recycling a frozen $S_1^{-1}$ as a preconditioner.
 
 ### Two traps, both verified against source
 
@@ -65,6 +119,24 @@ and `pcg` refuses it.
 2. **BC elimination is not re-derived.** The KKT pair is assembled
    byte-identically to `src.stokes.solve_stokes_immersed` and then *sliced*, so
    `K\b` is free ground truth and a whole class of BC bugs cannot occur.
+
+### Correctness gates
+
+The algebra is checked independently of the incremental shortcut:
+
+- `tests/test_schur_incremental.m` constructs
+  $D+G_nA^{-1}G_n^{\top}$ from scratch at every tested step and compares it with
+  the hoisted-block construction. It also verifies that the pressure–pressure
+  block is bit-identical across steps and that the update is confined to the
+  multiplier border.
+- `tests/test_schur_correctness.m` solves the Schur system, scatters the pinned
+  pressure value, recovers $u$, and compares the result with the full `K\b`
+  solution for all three motions. The observed relative errors are approximately
+  $10^{-13}$--$10^{-14}$ on the coarse test problem.
+- `tests/test_pin_handling.m` verifies that the unreduced Schur matrix has exactly
+  one negative eigenvalue in the decoupled pinned-pressure direction, and that
+  deleting that index leaves the same SPD matrix returned by
+  `schur_step_operator`.
 
 ---
 
