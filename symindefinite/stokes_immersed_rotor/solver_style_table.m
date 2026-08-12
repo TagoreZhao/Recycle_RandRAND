@@ -9,7 +9,7 @@ function sty = solver_style_table(n)
 %       .markersize scalar
 %
 %   Rows 1-8 are the Okabe-Ito colourblind-safe palette (yellow dropped --
-%   illegible on white); rows 9-10 extend it because the registry outgrew eight
+%   illegible on white); rows 9-11 extend it because the registry outgrew eight
 %   solvers.  They differ in colour AND marker AND linestyle, because in this
 %   benchmark curves genuinely coincide: with DEFLAT_RECYCLE_K = 0 the
 %   two_level_krylov iteration counts are bit-identical to two_level_gaussian,
@@ -25,8 +25,8 @@ function sty = solver_style_table(n)
 %   and coincident curves render as concentric bands instead of one erasing the
 %   others.  Staggered markers (see plot_solver_curves) separate them further.
 %
-%   Beyond ten the table cycles: colours advance one step out of phase with
-%   markers, so the repeat period is 10*8 rather than 10.
+%   Beyond eleven the table cycles: colours advance one step out of phase with
+%   markers, so the repeat period is 11*10 rather than 11.
 %
 %   See also: plot_solver_curves, mark_coincident_curves.
 
@@ -42,15 +42,18 @@ function sty = solver_style_table(n)
               0.34 0.71 0.91;    % sky blue
               0.60 0.60 0.60;    % grey
               0.45 0.16 0.51;    % violet     (extension, see note above)
-              0.40 0.50 0.15];   % olive      (extension)
+              0.40 0.50 0.15;    % olive      (extension)
+              0.55 0.05 0.15];   % maroon     (extension)
     markers    = {'o', 's', '^', 'd', 'v', 'p', 'h', '>', '<', '*'};
-    % Only four line styles exist, so rows must repeat one; row 10 takes ':' and
-    % not '--' because two_level_krylov lands there and coincides EXACTLY with
-    % two_level_gaussian (row 6) and near-exactly with two_level_sjlt (row 5) --
-    % that trio has to differ in colour, marker AND line style to stay readable.
-    linestyles = {'-', '--', '-.', '-', '--', '-.', ':', ':', '-', ':'};
-    linewidths = [2.2 2.0 1.9 1.8 1.6 1.5 1.4 1.1 1.0 0.9];
-    markersizes = [5 5 5 6 6 6 6 6 6 6];
+    % Only four line styles exist, so rows must repeat one; row 11 takes '-' and
+    % not '--' or '-.' because two_level_krylov lands there and coincides EXACTLY
+    % with two_level_gaussian (row 6, '-.') and near-exactly with two_level_sjlt
+    % (row 5, '--') -- that trio has to differ in colour, marker AND line style to
+    % stay readable.  Row 10 (two_level_lowrank_sketch) keeps ':' so it separates
+    % from the solid rows above it.
+    linestyles = {'-', '--', '-.', '-', '--', '-.', ':', ':', '-', ':', '-'};
+    linewidths = [2.2 2.0 1.9 1.8 1.6 1.5 1.4 1.1 1.0 0.9 0.85];
+    markersizes = [5 5 5 6 6 6 6 6 6 6 6];
 
     nb = size(colors, 1);
     sty = repmat(struct('color', [0 0 0], 'marker', 'o', 'linestyle', '-', ...

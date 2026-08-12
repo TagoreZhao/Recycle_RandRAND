@@ -60,12 +60,36 @@ function solvers = define_solver_list(params)
 %     GMRES_MAXIT          iteration cap for the (unrestarted) gmres_exact_inv_frozen
 %                          arm; must stay above 2*nC+1 or it caps the claim
 %
+%   Low-rank sketch knobs (the 'two_level_lowrank_sketch' entry):
+%     LOWRANK_SM_EIG       # small eigendirections of interest
+%     LOWRANK_OVERSAMPLE   oversampling FACTOR; the sketch width is
+%                          k = LOWRANK_OVERSAMPLE * LOWRANK_SM_EIG
+%     LOWRANK_SKETCH_Q     power-iteration rounds q
+%     LOWRANK_REF_REFRESH  cadence of the frozen reference factorization (Inf = once)
+%
 %   Low-rank finite termination (the 'gmres_exact_inv_frozen' entry).  K_n - K_1 is
 %   symmetric of rank 2*rank(dC) <= 2*nC, so left-preconditioning K_n with the EXACT
 %   SIGNED inverse of K_1 gives I plus a rank-r update and unrestarted GMRES must
 %   terminate in <= r+1 iterations.  MINRES cannot run this operator (K_1^-1 is
 %   indefinite), which is exactly why the arm is GMRES.  See gmres_frozen_solve and
 %   write_lowrank_bound_figure.
+%
+%   Low-rank A^-1 B sketch (the 'two_level_lowrank_sketch' entry).  The same two-level
+%   scheme as the rest of the family -- ILDL smoother, P^{1/2} coarse correction on
+%   Ahat^2, MINRES on the split operator -- differing ONLY in how the coarse space is
+%   built.  With A_1 = K_1 factored once and frozen and A_2 = K_n the current system,
+%   the directions the update moves are the range of the NONSYMMETRIC D = A_1^-1(A_2 - A_1),
+%   whose dominant left singular subspace is taken by randomized power iteration:
+%       Y = (D D')^q D Omega,   Omega = randn(n, k),   V = orth(C_n' Y).
+%   Because K_n - K_1 = U B U' with U = [dC, Sel] and B invertible, range(D) is exactly
+%   K_1^-1 range(U), of dimension <= 2*nC -- so at k >= 2*nC this coarse space contains
+%   every direction the operator update can have moved, at <= 2*nC EFFECTIVE columns
+%   rather than DEFLAT_SM_EIG of them, and with no refactorization after step 1.  Below
+%   that rank the sketch is not merely weaker but WORSE than no coarse space at all --
+%   see the measurements at the LOWR defaults below.  What is recycled
+%   here is the FACTORIZATION of A_1, not the subspace: V depends on dK = K_n - K_1 and
+%   is rebuilt every step, which is why this entry does not use cached_basis.  See
+%   build_lowrank_sketch_V.
 %
 %   Krylov recycling (the 'two_level_krylov' entry).  Consecutive KKT systems differ
 %   only through the moving coupling block C(t_n), so the directions MINRES converged
@@ -110,6 +134,11 @@ function solvers = define_solver_list(params)
     R_deflat = getdef(params, 'DEFLAT_PREC_REFRESH',   Inf);
     R_dinv   = getdef(params, 'DINVERSE_PREC_REFRESH', Inf);
     R_exact  = getdef(params, 'EXACT_PREC_REFRESH',    Inf);
+    % Own cadence, deliberately NOT shared with EXACT_PREC_REFRESH: that knob owns an
+    % ILDL-struct factor used as a SMOOTHER, this one owns the raw ldl factors of the
+    % REFERENCE system the low-rank sketch differences against.  Different objects,
+    % so different knobs (the one-knob-per-component convention above).
+    R_lowref = getdef(params, 'LOWRANK_REF_REFRESH',   Inf);
 
     % --- GMRES budget (the low-rank arm; full/unrestarted, see gmres_frozen_solve) ---
     GMRES_MAXIT = getdef(params, 'GMRES_MAXIT', 300);
@@ -127,6 +156,31 @@ function solvers = define_solver_list(params)
         'droptol',      getdef(params, 'ILDL_DROPTOL',        1e-3), ...
         'cheb_degree',  getdef(params, 'DEFLAT_CHEB_DEGREE',  12), ...
         'recycle_k',    getdef(params, 'DEFLAT_RECYCLE_K',    50));
+
+    % --- low-rank A^-1 B sketch hyperparameters (two_level_lowrank_sketch) ------
+    % The sketch width is the oversampling FACTOR times the number of small
+    % eigendirections of interest, and V keeps all k columns (Omega is n-by-k, V is
+    % n-by-k; there is no post-hoc truncation back to sm_eig).  rank(D) <= 2*nC caps
+    % what k can actually buy -- see build_lowrank_sketch_V.
+    %
+    % THE DEFAULT PUTS k ABOVE 2*nC ON PURPOSE.  At h0 = 0.05 nC is 48 for bar_rotating
+    % and 120 for the disks, so 2*nC <= 240 and k = 2*125 = 250 clears every case.
+    % Below that rank the sketch keeps only the directions the UPDATE moved most, which
+    % is not the same as the directions the OPERATOR is worst conditioned in, and it
+    % measures WORSE than no coarse space at all.  Measured, MINRES iterations:
+    %   h0=0.1  bar  (2nC= 48) step 2: smoother alone 385 | k= 15  411 | k>=48  273
+    %   h0=0.05 disk (2nC=240) step 3: smoother alone 1931 | k=100 2119 | k=250 1184
+    % test_lowrank_sketch_V T9 pins that boundary, so lowering sm_eig below nC is an
+    % experiment, not a saving.
+    LOWR = struct( ...
+        'sm_eig',     getdef(params, 'LOWRANK_SM_EIG',    125), ...
+        'oversample', getdef(params, 'LOWRANK_OVERSAMPLE',  2), ...
+        'q',          getdef(params, 'LOWRANK_SKETCH_Q',    2), ...
+        'reorth',     true, ...
+        'tau',        DEFL.tau, ...
+        'ildl_mode',  DEFL.ildl_mode, ...
+        'droptol',    DEFL.droptol);
+    LOWRANK_K = LOWR.oversample * LOWR.sm_eig;
 
     solvers = {};
 
@@ -197,6 +251,23 @@ function solvers = define_solver_list(params)
         'build', [], ...
         'solve', @(K,b,tol,mit,pc) ...
                  gmres_frozen_solve(K, b, tol, mit, pc, R_exact, GMRES_MAXIT));
+
+    % Two-level deflation whose coarse space is a randomized sketch of the update
+    % operator D = K_1^-1 (K_n - K_1) -- the frozen step-1 factorization recycled into
+    % a coarse space for the CURRENT system rather than into a solve.  Same smoother,
+    % same P^{1/2} coarse correction and same tau as the rest of the family, so the
+    % comparison against two_level_gaussian / two_level_exact isolates the ONE thing
+    % that differs: where V comes from.  Registered after gmres_exact_inv_frozen and
+    % before two_level_krylov so that registry rows 1-9 keep their existing plot
+    % styles and the last-solver privileges (accuracy.png, the relres /
+    % solver_err_last CSV columns, the engine progress print) stay with krylov.
+    solvers{end+1} = struct( ...
+        'key',   'two_level_lowrank_sketch', ...
+        'label', sprintf(['MINRES (ILDL + deflation, K_1^{-1}(K_n-K_1) sketch V, ' ...
+                          'k=%d, q=%d)'], LOWRANK_K, LOWR.q), ...
+        'build', [], ...
+        'solve', @(K,b,tol,mit,pc) ...
+                 tl_solve_lowrank(K, b, tol, mit, pc, LOWR, R_ildl, R_lowref));
 
     % Krylov recycling: the gaussian coarse space + the last DEFLAT_RECYCLE_K
     % ILDL-preconditioned residuals harvested from the PREVIOUS step's solve.
@@ -362,15 +433,62 @@ function [x, fl, rr, it] = tl_solve_krylov(K, b, tol, mit, pc, opts, R_ildl, R_d
     pc.cache('krylov_U') = struct('step', pc.step, 'U', P.applyCtinv(getU()));
 end
 
-function [P, V] = two_level_parts(K, pc, method, opts, R_ildl, R_deflat, R_dinv)
-%TWO_LEVEL_PARTS  The cached ILDL factor and coarse basis for one V-building method.
-% Shared by every two-level entry, so the ildl / dinv / V_<method> keys are built at
-% most once per refresh-step no matter how many solvers ask for them.
+function [x, fl, rr, it] = tl_solve_lowrank(K, b, tol, mit, pc, opts, R_ildl, R_ref)
+%TL_SOLVE_LOWRANK  Split two-level solve whose coarse space is a randomized sketch of
+% the update operator D = K_ref^-1 (K_n - K_ref).  See build_lowrank_sketch_V for the
+% method and the span it targets; everything downstream of V is the ordinary
+% src.precond.two_level_split_solve the rest of the family uses.
+%
+% WHAT IS RECYCLED IS THE FACTORIZATION, NOT THE SUBSPACE.  Every other basis in this
+% file is cached across steps and transported into the current coordinates
+% (cached_basis).  Here V depends on dK = K_n - K_ref, which changes every step, so
+% there is nothing to freeze: the frozen object is the reference ldl, and V is rebuilt
+% from it each step.  Using cached_basis would silently pin the coarse space to the
+% step it was first built at and measure something else entirely.
+%
+% The ILDL smoother comes from the SAME cache key the other two-level entries use, so
+% adding this arm costs no extra smoother -- only its own coarse space.
+%
+% VALIDITY PREDICATE on the reference context: required for the same reason
+% exact_ldl_frozen needs one.  A frozen factor is APPLIED at every later step and
+% size(K,1) = nU + nP + nC changes if a Lagrange point leaves the fluid mesh; without
+% it, dK = K - ctx.Kref is an opaque dimension error rather than a warned rebuild.
+%
+% info is stashed under 'lowrank_info' (a plain cache set, not the refresh-cadence
+% path) so the EFFECTIVE coarse dimension -- info.ncols, which rank truncation can put
+% below k -- is observable after a run.  k is what was asked for; ncols is what was
+% deflated, and it is the one to quote.
+    P   = cached_ildl(K, pc, opts, R_ildl);
+    ctx = cached(pc, 'lowrank_ref', R_ref, ...
+                 @() frozen_ldl_context(K), ...
+                 @(v) v.n == size(K, 1));
+
+    o = struct('k',      opts.oversample * opts.sm_eig, ...
+               'q',      opts.q, ...
+               'reorth', opts.reorth, ...
+               'Cn',     current_C(pc, P));
+    [V, info] = build_lowrank_sketch_V(ctx, K, P, o);
+    pc.cache('lowrank_info') = struct('step', pc.step, 'val', info);
+
+    [x, fl, rr, it] = src.precond.two_level_split_solve(K, b, tol, mit, P, V, opts.tau);
+end
+
+function P = cached_ildl(K, pc, opts, R_ildl)
+%CACHED_ILDL  The ILDL smoother on its own refresh cadence, under the key every
+% two-level entry shares (so it is built at most once per refresh-step no matter how
+% many solvers ask for it).
     ikey = ['ildl_' opts.ildl_mode];
     ildl_opts = struct('mode', opts.ildl_mode);
     if strcmp(opts.ildl_mode, 'droptol'), ildl_opts.droptol = opts.droptol; end
     P = cached(pc, ikey, R_ildl, ...
                @() src.precond.make_ildl_precond(K, ildl_opts));
+end
+
+function [P, V] = two_level_parts(K, pc, method, opts, R_ildl, R_deflat, R_dinv)
+%TWO_LEVEL_PARTS  The cached ILDL factor and coarse basis for one V-building method.
+% Shared by every two-level entry, so the ildl / dinv / V_<method> keys are built at
+% most once per refresh-step no matter how many solvers ask for them.
+    P = cached_ildl(K, pc, opts, R_ildl);
 
     if strcmp(method, 'none')
         V = [];

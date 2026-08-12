@@ -22,7 +22,8 @@ fprintf('=== test_plot_helpers ===\n');
 
 KEYS = {'minres_unprec'; 'block_jacobi'; 'ildl_nofill'; 'exact_ldl_frozen'; ...
         'two_level_sjlt'; 'two_level_gaussian'; 'two_level_polynomial'; ...
-        'two_level_exact'; 'gmres_exact_inv_frozen'; 'two_level_krylov'};
+        'two_level_exact'; 'gmres_exact_inv_frozen'; ...
+        'two_level_lowrank_sketch'; 'two_level_krylov'};
 nK = numel(KEYS);
 
 %% ------------------------------------------------- solver_short_label ----
@@ -34,6 +35,7 @@ short = solver_short_label(KEYS);
                     'exact LDL (frozen)'; '2-level: sjlt V'; ...
                     '2-level: gaussian V'; '2-level: polynomial V'; ...
                     '2-level: exact V'; 'GMRES: exact K_1^{-1}'; ...
+                    '2-level: A^{-1}B sketch V'; ...
                     '2-level: gauss V + recycling'}));
 
 % T2  labels must be distinguishable, or the legend is useless.
@@ -72,12 +74,12 @@ for i = 1:nK
 end
 [np, nf] = chk(np, nf, 'T7  no two styles share colour AND marker', ~dup);
 
-% T8  the trio that genuinely coincides (sjlt=5, gaussian=6, krylov=10) must
-%     differ in all three attributes, not just one.  krylov sits at 10, not 9,
-%     since gmres_exact_inv_frozen is registered ahead of it (deliberately: the
-%     LAST registry entry owns accuracy.png and the relres/solver_err_last CSV
-%     columns, which must keep tracking two_level_krylov).
-trio = [5 6 10];
+% T8  the trio that genuinely coincides (sjlt=5, gaussian=6, krylov=11) must
+%     differ in all three attributes, not just one.  krylov sits LAST, not at 9,
+%     since gmres_exact_inv_frozen and two_level_lowrank_sketch are registered
+%     ahead of it (deliberately: the LAST registry entry owns accuracy.png and the
+%     relres/solver_err_last CSV columns, which must keep tracking two_level_krylov).
+trio = [5 6 11];
 ok = true;
 for a = 1:3
     for b = a+1:3

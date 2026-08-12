@@ -383,13 +383,76 @@ SPD `report/solve_deflate_M_P` scheme (ICHOL→ILDL, PCG→MINRES):
     to the low end and is amplified), with a random start. The reject-band edge is
     `lam_cut_frac`·$\max|\lambda(\hat A)|$; set it near $|\lambda_k|/\max|\lambda|$.
 
+- **Low-rank $A^{-1}B$ sketch (`two_level_lowrank_sketch`)** — the same split
+  scheme, the same $P^{1/2}$ coarse correction on $\hat A^2$ and the same $\tau$;
+  only the source of $\hat V$ differs, so the comparison against `two_level_exact`
+  and `two_level_gaussian` isolates exactly that. With $A_1=\mathcal K_1$ factored
+  **once** and frozen and $A_2=\mathcal K_n$ the current system, the directions the
+  update moves are the range of the **nonsymmetric** $D = A_1^{-1}(A_2-A_1)$, whose
+  dominant left singular subspace is taken by randomized power iteration:
+
+  ```math
+  Y \;=\; (DD^\top)^q D\,\Omega,\qquad \Omega\in\mathbb R^{n\times k}\ \text{Gaussian},\qquad \hat V \;=\; \mathrm{orth}\big(C_n^\top Y\big).
+  ```
+
+  $D$ is never formed: each block application is one sparse $\Delta\mathcal K$
+  multiply plus one **batched** backsolve against the frozen factors (raw `ldl`
+  factors, not a `decomposition` — that object does not batch a multi-column
+  right-hand side, which is the whole cost argument here; see
+  `frozen_ldl_apply.m`). Because
+  $\mathcal K_n-\mathcal K_1 = U\mathcal B U^\top$ with $U=[\Delta C,\ \Sigma]$ and
+  $\mathcal B$ invertible, the target span is known exactly:
+
+  ```math
+  \mathrm{range}(D) \;=\; \mathcal K_1^{-1}\,\mathrm{range}(U), \qquad \dim \le 2n_C ,
+  ```
+
+  the same space `lowrank_update_basis` computes in one shot — this arm differs in
+  that it **truncates to the dominant $k$** of it. Two consequences, both measured:
+  $k$ beyond $2n_C$ buys nothing (the pivoted QR returns fewer than $k$ columns and
+  `info.rank_drop` says so, which is why the **effective** dimension `info.ncols`,
+  not $k$, is the number to quote), and $k$ *below* $2n_C$ is actively harmful — the
+  directions the **update** moved most are not the directions the **operator** is
+  worst conditioned in. Measured MINRES iteration counts:
+
+  | case | $2n_C$ | smoother alone | $k$ below $2n_C$ | $k\ge 2n_C$ | `two_level_gaussian` |
+  |---|---|---|---|---|---|
+  | `bar_rotating`, $h_0=0.1$, step 2 | 48 | 385 | 411 ($k=15$) | **273** | 163 (48 cols) |
+  | `disk_translating`, $h_0=0.05$, step 2 | 240 | 907 | 896 ($k=100$) | **597** ($k=250$) | 203 (500 cols) |
+  | `disk_translating`, $h_0=0.05$, step 3 | 240 | 1931 | 2119 ($k=100$) | **1184** ($k=250$) | 318 (500 cols) |
+
+  So the arm is a real gain over the smoother alone *only* in the $k\ge 2n_C$
+  regime, and it does not reach `two_level_gaussian`, which spends 500 columns
+  targeting the actual smallest-$|\lambda|$ modes rather than the update. The sketch
+  width is $k=\texttt{LOWRANK\_OVERSAMPLE}\cdot\texttt{LOWRANK\_SM\_EIG}$ (default
+  $2\times 125=250$, which clears $2n_C\le 240$ for every case at $h_0=0.05$: $n_C$
+  is 48 for the bar and 120 for the disks), and $\hat V$ keeps all $k$ columns. **If
+  `define_motion_list` changes $n_C$, re-check that the default still clears
+  $2n_C$** — `info.rank_drop` in the cached `lowrank_info` entry reports the margin.
+
+  **Cost, in operations rather than seconds:** per step $(2q+1)k$ batched
+  backsolves against the frozen factor (fewer once rank truncation shrinks the
+  block — 1210 rather than 1250 at $k=250$), $(2q+1)k$ sparse $\Delta\mathcal K$
+  matvecs, one $n\times k$ pivoted QR, and **no refactorization after step 1** —
+  against `two_level_gaussian`'s $(q+1)\cdot\texttt{DEFLAT\_SM\_EIG}$ column solves
+  through a `decomposition` (which does not batch) and a
+  $2\times$`DEFLAT_SM_EIG`-wide $\hat E$ build. What is recycled here is the
+  **factorization** of $A_1$, not the subspace: $\hat V$ depends on
+  $\Delta\mathcal K=\mathcal K_n-\mathcal K_1$ and is rebuilt every step, so this is
+  the one deflation entry that does not use `cached_basis`. On `disk_static`
+  $\Delta\mathcal K\equiv 0$, there is no space to build, and the arm degrades to
+  plain `ildl_nofill` with **identical** counts — the falsification control.
+  See `build_lowrank_sketch_V.m`, `frozen_ldl_context.m` and
+  `tests/test_lowrank_sketch_V.m`.
+
 These rebuild as the coupling $C(t_n)$ moves, under independent **refresh
 cadences** — one knob per preconditioner component, mirroring the report's
 `*_PREC_REFRESH` (default `Inf` = build once and **recycle** across the moving
 sequence; set to `N` to rebuild every `N` steps):
 `BLOCKJAC_PREC_REFRESH`, `ILDL_PREC_REFRESH`, `DEFLAT_PREC_REFRESH` (the basis
 $\hat V$), `DINVERSE_PREC_REFRESH` (the exact-inverse factor for sketched V),
-`EXACT_PREC_REFRESH` (the frozen exact-LDL factor).
+`EXACT_PREC_REFRESH` (the frozen exact-LDL factor), `LOWRANK_REF_REFRESH` (the
+frozen `ldl` of the reference system $A_1$ the low-rank sketch differences against).
 
 **Coordinates: $\hat V$ is a representation, not a subspace.** MINRES runs on
 $\hat A_n = C_n^{-1}\mathcal K_n C_n^{-\top}$ with $\hat y = C_n^\top x$, so a basis

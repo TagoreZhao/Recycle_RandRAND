@@ -9,6 +9,7 @@
 % "block Jacobi" preconditioner, incomplete-LDL, the EXACT LDL factor of step 1
 % frozen for the whole sequence (exact_ldl_frozen), the two-level deflation family
 % (L^-T P L^-1, with exact / gaussian / sjlt / polynomial coarse spaces), the
+% low-rank A^{-1}B sketch variant two_level_lowrank_sketch, the
 % Krylov-recycling variant two_level_krylov, and one GMRES arm
 % (gmres_exact_inv_frozen) that tests the low-rank finite-termination bound.
 % Method knobs and per-preconditioner refresh cadences are set in the params
@@ -27,6 +28,21 @@
 % case and states on the figure whether the claim held.  exact_ldl_frozen is the
 % controlled contrast -- the SAME frozen factor, SPD-ified (M = |K_1|) so MINRES can
 % use it at all, which costs the clean I + low-rank structure.
+%
+% Low-rank A^{-1}B sketch (two_level_lowrank_sketch).  The same two-level scheme as the
+% rest of the deflation family, differing only in where the coarse space comes from:
+% with A_1 = K_1 factored ONCE and frozen and A_2 = K_n the current system, the
+% directions the update moves are the range of the nonsymmetric D = A_1^{-1}(A_2 - A_1),
+% whose dominant left singular subspace is taken by randomized power iteration,
+% V = orth(C_n' (D D')^q D Omega).  Since K_n - K_1 = U B U' with U = [dC, Sel] and B
+% invertible, range(D) is EXACTLY K_1^{-1} range(U), of dimension <= 2*nC -- so at
+% k >= 2*nC this coarse space contains every direction the operator update can have
+% moved, at <= 2*nC effective columns rather than DEFLAT_SM_EIG = 500 of them, and
+% with no refactorization after step 1.  Per step it costs (2q+1)*k batched backsolves against
+% the frozen factor, (2q+1)*k sparse dK matvecs and one n-by-k pivoted QR.  What is
+% recycled is the FACTORIZATION of A_1, not the subspace: V is rebuilt every step
+% because dK changes.  gmres_exact_inv_frozen is the floor this arm is reaching for,
+% and two_level_gaussian / two_level_exact are the incumbents it is cheaper than.
 %
 % Krylov recycling (two_level_krylov).  Consecutive KKT systems differ only through
 % the moving coupling block C(t_n), so the directions MINRES converged slowly on at
@@ -84,6 +100,20 @@ params.DEFLAT_RECYCLE_K    = 0;        % # ILDL-preconditioned residuals recycle
                                         % previous step into two_level_krylov's coarse space
 params.ILDL_MODE           = 'nofill';  % incomplete-LDL pattern: 'nofill' | 'droptol'
 params.ILDL_DROPTOL        = 1e-3;      % drop tolerance when ILDL_MODE = 'droptol'
+% Low-rank A^{-1}B sketch (two_level_lowrank_sketch).  The sketch width is
+% k = LOWRANK_OVERSAMPLE * LOWRANK_SM_EIG and V keeps all k columns.  k = 250 clears
+% 2*nC (96 for the bar, 240 for the disks at this h0) for every case here, which is
+% the regime the arm works in: below that rank the sketch keeps the directions the
+% UPDATE moved most rather than the ones the OPERATOR is worst conditioned in, and
+% measures WORSE than the smoother alone -- on disk_translating step 3, k = 100 took
+% 2119 iterations against 1931 for no coarse space and 1184 at k = 250.
+% test_lowrank_sketch_V T9 pins the boundary.  If nC changes (define_motion_list),
+% RE-CHECK that 2*LOWRANK_SM_EIG still clears 2*nC.
+params.LOWRANK_SM_EIG      = 125;       % # small eigendirections of interest
+params.LOWRANK_OVERSAMPLE  = 2;         % oversampling FACTOR -> k = 2*125 = 250
+params.LOWRANK_SKETCH_Q    = 2;         % power-iteration rounds q on D = K_1^{-1}(K_n-K_1)
+params.LOWRANK_REF_REFRESH = Inf;       % frozen ldl of the reference system (Inf = once)
+
 params.GMRES_MAXIT         = 300;       % iteration cap for gmres_exact_inv_frozen.
                                         % Full (unrestarted) GMRES, so this is a cap
                                         % on TOTAL iterations and on the Krylov basis
@@ -136,7 +166,7 @@ if evalin('base', 'exist(''SMOKE_TEST'',''var'') && logical(SMOKE_TEST)')
     case_names = case_names(1);   % single (stress) case
 end
 
-results_root = fullfile(thisFileDir, 'benchmark_no_krylov_recycle');
+results_root = fullfile(thisFileDir, 'benchmark_no_krylov_recycle_with_new');
 if ~exist(results_root, 'dir'), mkdir(results_root); end
 
 %% ===================== 4. Loop over cases =================================
