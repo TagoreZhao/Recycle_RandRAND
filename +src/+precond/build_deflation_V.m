@@ -22,12 +22,22 @@ function V = build_deflation_V(A, P, opts, dA)
 %           .lg_eig        # largest-|lambda|  deflation vectors  (>= 0, default 0)
 %                          (require sm_eig + lg_eig >= 1)
 %           .q             sketch power-iteration steps           (default 2)
+%           .oversample    sketch-width factor for the RANDOMIZED methods
+%                          ('gaussian'/'sjlt'): the start block has
+%                          round(oversample*sm_eig) columns (and
+%                          round(oversample*lg_eig) for the large basis),
+%                          ALL of which are kept — the final qr only
+%                          orthonormalizes, it never truncates.  The
+%                          deterministic methods ('exact'/'polynomial')
+%                          ignore it.                             (default 1)
 %           .cheb_degree   Chebyshev degree, 'polynomial'         (default 12)
 %   dA    optional precomputed decomposition(A) reused by the inverse-power
 %         sketch methods ('gaussian'/'sjlt'); [] -> build internally.
 %
 % Output
-%   V     n-by-(sm_eig+lg_eig) real matrix with orthonormal columns (V'V = I).
+%   V     real matrix with orthonormal columns (V'V = I); n-by-(sm_eig+lg_eig)
+%         for the deterministic methods, wider by the oversample factor for
+%         the randomized ones (no truncation).
 %
 % Methods (small basis)
 %   'exact'       smallest-|lambda| eigvecs of Ahat via the generalized eig
@@ -61,6 +71,8 @@ function V = build_deflation_V(A, P, opts, dA)
     sm     = getfield_default(opts, 'sm_eig', 0);
     lg     = getfield_default(opts, 'lg_eig', 0);
     q      = getfield_default(opts, 'q', 2);
+    ovs    = getfield_default(opts, 'oversample', 1);
+    if ovs < 1, error('build_deflation_V:badOversample', 'opts.oversample must be >= 1.'); end
     if sm < 0, error('build_deflation_V:badSmEig', 'opts.sm_eig must be >= 0.'); end
     if lg < 0, error('build_deflation_V:badLgEig', 'opts.lg_eig must be >= 0.'); end
     if sm + lg < 1
@@ -93,7 +105,7 @@ function V = build_deflation_V(A, P, opts, dA)
                     dA = decomposition(A);                % exact A^-1 factorization
                 end
                 AinvFun = @(Y) C' * (dA \ (C * Y));       % Ahat^-1 = C' A^-1 C
-                Vs = subspace_iter_plain(AinvFun, start_block(method, n, sm), q);
+                Vs = subspace_iter_plain(AinvFun, start_block(method, n, round(ovs * sm)), q);
 
             case 'polynomial'
                 % Exact Chebyshev reject band from the (A,M) generalized spectrum
@@ -137,7 +149,12 @@ function V = build_deflation_V(A, P, opts, dA)
             % forward power iteration on the split operator -> largest |lambda|
             % modes (raise q to better resolve a tightly-clustered large end).
             Ahat = @(Y) P.applyCinv(A * P.applyCtinv(Y));
-            Vl = subspace_iter_plain(Ahat, start_block(method, n, lg), q);
+            if any(strcmp(method, {'gaussian', 'sjlt'}))
+                wl = round(ovs * lg);          % randomized: oversampled width
+            else
+                wl = lg;                       % 'polynomial': no oversampling
+            end
+            Vl = subspace_iter_plain(Ahat, start_block(method, n, wl), q);
         end
         V = [Vs, Vl];
     else

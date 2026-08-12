@@ -45,3 +45,9 @@ symindefinite/stokes_immersed_rotor_woodbury/woodbury_direct_smoke/
 symindefinite/stokes_immersed_rotor_woodbury/output/
 # top level only; the committed woodbury_direct/run_config.mat is one level deeper
 symindefinite/stokes_immersed_rotor_woodbury/*.mat
+
+# stokes_varvisc_rotor: generated benchmark outputs
+symindefinite/stokes_varvisc_rotor/benchmark_varvisc/
+symindefinite/stokes_varvisc_rotor/convergence_out/
+symindefinite/stokes_varvisc_rotor/output/
+symindefinite/stokes_varvisc_rotor/*.mat
