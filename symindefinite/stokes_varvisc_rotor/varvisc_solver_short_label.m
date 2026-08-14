@@ -34,7 +34,7 @@ function s = varvisc_solver_short_label(key)
         case 'two_level_gaussian',   s = '2-level: gaussian V';
         case 'two_level_polynomial', s = '2-level: polynomial V';
         case 'two_level_exact',      s = '2-level: exact V';
-        case 'two_level_lowrank_sketch', s = '2-level: A^{-1}B sketch V';
+        case 'two_level_esketch',    s = '2-level: C^{-1}BC^{-T} sketch V';
         otherwise
             % Unknown key: readable fallback so a newly registered solver still
             % plots without touching this file.

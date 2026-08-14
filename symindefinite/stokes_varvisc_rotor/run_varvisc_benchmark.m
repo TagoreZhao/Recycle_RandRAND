@@ -67,7 +67,7 @@ params.DEFLAT_PREC_REFRESH   = Inf;   % deflation subspace V (transported step-1
                                       % a stale decomposition(K_1) with the current C.
 params.DINVERSE_PREC_REFRESH = Inf;   % exact A^{-1} factor (sketched V methods)
 params.EXACT_PREC_REFRESH    = Inf;   % EXACT LDL factor of the step-1 KKT (frozen)
-params.LOWRANK_REF_REFRESH   = Inf;   % frozen ldl of the low-rank sketch reference
+params.ESKETCH_REF_REFRESH   = Inf;   % frozen exact split factor C_1 of the E-sketch reference
 
 % Two-level / deflation method parameters (consumed by varvisc_define_solver_list).
 % ONE sketch configuration for every randomized method: width

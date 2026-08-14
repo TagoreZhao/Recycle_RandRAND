@@ -53,7 +53,8 @@ function solvers = varvisc_define_solver_list(params)
 %                            match -- otherwise the inverse-power sketch mixes
 %                            a stale decomposition(K_1) with the current C.
 %     EXACT_PREC_REFRESH     EXACT LDL factor C (the frozen exact_ldl_frozen arm)
-%     LOWRANK_REF_REFRESH    frozen reference ldl of the low-rank sketch (Inf = once)
+%     ESKETCH_REF_REFRESH    frozen reference split factor C_ref of the E-sketch
+%                            (Inf = once)
 %
 %   Two-level / deflation method knobs (params.*):
 %     DEFLAT_SM_EIG        # smallest-|lambda| deflation vectors (report sm_eig)
@@ -98,9 +99,9 @@ function solvers = varvisc_define_solver_list(params)
     R_dinv   = getdef(params, 'DINVERSE_PREC_REFRESH', Inf);
     R_exact  = getdef(params, 'EXACT_PREC_REFRESH',    Inf);
     % Own cadence, deliberately NOT shared with EXACT_PREC_REFRESH: that knob owns
-    % an ILDL-struct factor used as a SMOOTHER, this one owns the raw ldl factors
-    % of the REFERENCE system the low-rank sketch differences against.
-    R_lowref = getdef(params, 'LOWRANK_REF_REFRESH',   Inf);
+    % an ILDL-struct factor used as a SMOOTHER, this one owns the exact split
+    % factor of the REFERENCE system the E-sketch differences against.
+    R_esk    = getdef(params, 'ESKETCH_REF_REFRESH',   Inf);
 
     % --- GMRES budget (full/unrestarted, see gmres_frozen_solve) --------------
     GMRES_MAXIT = getdef(params, 'GMRES_MAXIT', 300);
@@ -118,13 +119,13 @@ function solvers = varvisc_define_solver_list(params)
         'droptol',      getdef(params, 'ILDL_DROPTOL',       1e-3), ...
         'cheb_degree',  getdef(params, 'DEFLAT_CHEB_DEGREE', 12));
 
-    % --- low-rank A^-1 B sketch (two_level_lowrank_sketch) --------------------
+    % --- symmetric E = C_1^-1 dK C_1^-T sketch (two_level_esketch) ------------
     % Same unified sketch parameters as the deflation arms; V keeps all
     % oversample*sm_eig columns (truncated only at numerical rank).  In this
     % benchmark dK = K_n - K_1 is numerically full-rank, so unlike the parent
     % there is no 2*nC ceiling on what the sketch can capture -- and no
     % guarantee that k columns contain every direction the operator moved.
-    LOWR = struct( ...
+    ESK = struct( ...
         'sm_eig',     DEFL.sm_eig, ...
         'oversample', DEFL.oversample, ...
         'q',          DEFL.q, ...
@@ -132,7 +133,7 @@ function solvers = varvisc_define_solver_list(params)
         'tau',        DEFL.tau, ...
         'ildl_mode',  DEFL.ildl_mode, ...
         'droptol',    DEFL.droptol);
-    LOWRANK_K = round(LOWR.oversample * LOWR.sm_eig);
+    ESKETCH_K = round(ESK.oversample * ESK.sm_eig);
 
     solvers = {};
 
@@ -208,22 +209,27 @@ function solvers = varvisc_define_solver_list(params)
         'solve', @(K,b,tol,mit,pc) ...
                  gmres_frozen_solve(K, b, tol, mit, pc, R_exact, GMRES_MAXIT));
 
-    % Two-level deflation whose coarse space is a randomized sketch of the update
-    % operator D = K_1^-1 (K_n - K_1) -- the frozen step-1 factorization recycled
-    % into a coarse space for the CURRENT system rather than into a solve.  Same
-    % smoother, same P^{1/2} coarse correction and same tau as the rest of the
-    % family, so the comparison against two_level_gaussian / two_level_exact
-    % isolates the ONE thing that differs: where V comes from.  What is reused is
-    % the FACTORIZATION of K_1, not a subspace: V depends on dK and is rebuilt
-    % every step.  Registered LAST -> featured in accuracy.png and the engine's
-    % progress print.
+    % Two-level deflation whose coarse space is a randomized eigen-sketch of the
+    % SYMMETRIC update operator E = C_1^-1 (K_n - K_1) C_1^-T, C_1 the exact
+    % step-1 split factor -- the frozen step-1 factorization recycled into a
+    % coarse space for the CURRENT system rather than into a solve.  E is the
+    % operator that actually perturbs the split system MINRES runs on
+    % (Ahat_1 = sign(D) + E), so its dominant EIGENVECTORS -- which the
+    % similarity map C_n^T C_1^-T transports exactly, unlike the singular
+    % spaces of the predecessor D = K_1^-1 dK sketch -- are the directions to
+    % deflate.  Same smoother, same P^{1/2} coarse correction and same tau as
+    % the rest of the family, so the comparison against two_level_gaussian /
+    % two_level_exact isolates the ONE thing that differs: where V comes from.
+    % What is reused is the FACTORIZATION of K_1, not a subspace: V depends on
+    % dK and is rebuilt every step.  Registered LAST -> featured in
+    % accuracy.png and the engine's progress print.
     solvers{end+1} = struct( ...
-        'key',   'two_level_lowrank_sketch', ...
-        'label', sprintf(['MINRES (ILDL + deflation, K_1^{-1}(K_n-K_1) sketch V, ' ...
-                          'k=%d, q=%d)'], LOWRANK_K, LOWR.q), ...
+        'key',   'two_level_esketch', ...
+        'label', sprintf(['MINRES (ILDL + deflation, C_1^{-1}(K_n-K_1)C_1^{-T} ' ...
+                          'sketch V, k=%d, q=%d)'], ESKETCH_K, ESK.q), ...
         'build', [], ...
         'solve', @(K,b,tol,mit,pc) ...
-                 tl_solve_lowrank(K, b, tol, mit, pc, LOWR, R_ildl, R_lowref));
+                 tl_solve_esketch(K, b, tol, mit, pc, ESK, R_ildl, R_esk));
 
     solvers = solvers(:);
 end
@@ -322,17 +328,17 @@ function [x, fl, rr, it] = gmres_frozen_solve(K, b, tol, mit, pc, refresh, gmaxi
     it = iter(end);
 end
 
-function [x, fl, rr, it] = tl_solve_lowrank(K, b, tol, mit, pc, opts, R_ildl, R_ref)
-%TL_SOLVE_LOWRANK  Split two-level solve whose coarse space is a randomized sketch
-% of the update operator D = K_ref^-1 (K_n - K_ref).  See varvisc_build_lowrank_sketch_V
-% for the method; everything downstream of V is the ordinary
-% src.precond.two_level_split_solve the rest of the family uses.
+function [x, fl, rr, it] = tl_solve_esketch(K, b, tol, mit, pc, opts, R_ildl, R_ref)
+%TL_SOLVE_ESKETCH  Split two-level solve whose coarse space is a randomized
+% eigen-sketch of the symmetric update operator E = C_ref^-1 (K_n - K_ref) C_ref^-T.
+% See varvisc_build_Esketch_V for the method; everything downstream of V is the
+% ordinary src.precond.two_level_split_solve the rest of the family uses.
 %
 % WHAT IS REUSED IS THE FACTORIZATION, NOT THE SUBSPACE.  Every other basis in
 % this file is cached across steps and transported into the current coordinates
 % (cached_basis).  Here V depends on dK = K_n - K_ref, which changes every step,
-% so there is nothing to freeze: the frozen object is the reference ldl, and V is
-% rebuilt from it each step.
+% so there is nothing to freeze: the frozen object is the reference split factor,
+% and V is rebuilt from it each step.
 %
 % The ILDL smoother comes from the SAME cache key the other two-level entries use,
 % so adding this arm costs no extra smoother -- only its own coarse space.
@@ -341,20 +347,20 @@ function [x, fl, rr, it] = tl_solve_lowrank(K, b, tol, mit, pc, opts, R_ildl, R_
 % exact_ldl_frozen needs one (size(K,1) changes if a Lagrange point leaves the
 % fluid mesh).
 %
-% info is stashed under 'lowrank_info' (a plain cache set, not the refresh-cadence
+% info is stashed under 'esketch_info' (a plain cache set, not the refresh-cadence
 % path) so the EFFECTIVE coarse dimension -- info.ncols, which rank truncation can
 % put below k -- is observable after a run.
     P   = cached_ildl(K, pc, opts, R_ildl);
-    ctx = cached(pc, 'lowrank_ref', R_ref, ...
-                 @() varvisc_frozen_ldl_context(K), ...
+    ctx = cached(pc, 'esketch_ref', R_ref, ...
+                 @() varvisc_esketch_ref_context(K), ...
                  @(v) v.n == size(K, 1));
 
     o = struct('k',      round(opts.oversample * opts.sm_eig), ...
                'q',      opts.q, ...
                'reorth', opts.reorth, ...
                'Cn',     current_C(pc, P));
-    [V, info] = varvisc_build_lowrank_sketch_V(ctx, K, P, o);
-    pc.cache('lowrank_info') = struct('step', pc.step, 'val', info);
+    [V, info] = varvisc_build_Esketch_V(ctx, K, P, o);
+    pc.cache('esketch_info') = struct('step', pc.step, 'val', info);
 
     [x, fl, rr, it] = src.precond.two_level_split_solve(K, b, tol, mit, P, V, opts.tau);
 end
