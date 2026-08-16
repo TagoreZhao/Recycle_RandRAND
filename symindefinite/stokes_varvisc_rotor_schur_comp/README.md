@@ -47,7 +47,7 @@ where
 A_{\mathrm{vel},n}
 =\frac{M_2}{\Delta t}+A_2(\nu^n),
 \qquad
-A_2(\nu^n)=\operatorname{blkdiag}(K_\nu^n,K_\nu^n),
+A_2(\nu^n)=\mathrm{blkdiag}(K_\nu^n,K_\nu^n),
 ```
 
 ```math
@@ -282,7 +282,7 @@ matrix can be assembled after only $n_C$ new velocity backsolves, and the
 update satisfies the multiplier-border bound
 
 ```math
-\operatorname{rank}(S_n-S_m)\le 2n_C.
+\mathrm{rank}(S_n-S_m)\le 2n_C.
 ```
 
 That shortcut is invalid here. Variable viscosity changes both $A_n$ and
