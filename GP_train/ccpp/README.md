@@ -124,7 +124,7 @@ the NLML gives
 \frac{\partial\mathcal L}{\partial\theta_j}
 =\frac{1}{2n}
 \left[
-\operatorname{tr}(A^{-1}A_j)
+\mathrm{tr}(A^{-1}A_j)
 -\alpha^\top A_j\alpha
 \right].
 ```
@@ -146,12 +146,12 @@ where $(D_r^2)_{ij}=(x_{ir}-x_{jr})^2$ and $\odot$ denotes entrywise
 multiplication. The positive sign in the lengthscale derivative follows because
 the variables are $\log\ell_r$, not $\ell_r$.
 
-Computing $\operatorname{tr}(A^{-1}A_j)$ exactly would be too expensive. The
+Computing $\mathrm{tr}(A^{-1}A_j)$ exactly would be too expensive. The
 benchmark fixes $m=8$ independent Rademacher probe vectors by default,
 $z_q\in\{-1,+1\}^n$, and uses the Hutchinson estimate
 
 ```math
-\operatorname{tr}(A^{-1}A_j)
+\mathrm{tr}(A^{-1}A_j)
 \approx
 \frac1m\sum_{q=1}^{m}
 z_q^\top A^{-1}A_jz_q
@@ -273,9 +273,9 @@ The code records two consecutive-state drift measures:
 =\frac{\lVert A_k-A_{k-1}\rVert_F}{\lVert A_{k-1}\rVert_F},
 \qquad
 \delta_{\rm off}^{(k)}
-=\frac{\lVert\operatorname{off}(s_{f,k}^2K_k)
--\operatorname{off}(s_{f,k-1}^2K_{k-1})\rVert_F}
-{\lVert\operatorname{off}(s_{f,k-1}^2K_{k-1})\rVert_F}.
+=\frac{\lVert\mathrm{off}(s_{f,k}^2K_k)
+-\mathrm{off}(s_{f,k-1}^2K_{k-1})\rVert_F}
+{\lVert\mathrm{off}(s_{f,k-1}^2K_{k-1})\rVert_F}.
 ```
 
 Here `off` sets the diagonal to zero. The second metric isolates changes in the
@@ -301,12 +301,12 @@ build or update its preconditioner and the time for all target/probe solves.
 | `exact_chol_recycle_once` | exact $A_1=L_0L_0^\top$ | build $L_0$ once |
 | `defl_exact_recycle_once` | 100 largest-eigenvalue modes of $A_1$ | build $V_1$ once |
 | `defl_exact_fresh_oracle` | 100 largest-eigenvalue modes of $A_k$ | rebuild at every state |
-| `defl_sketch_q1_recycle_once` | $\operatorname{qr}(K_1\Omega)$ | build once |
-| `defl_sketch_q1_fresh_oracle` | $\operatorname{qr}(K_k\Omega)$ | rebuild every state |
-| `defl_sketch_q2_recycle_once` | $\operatorname{qr}(K_1^2\Omega)$ | build once |
-| `defl_sketch_q2_fresh_oracle` | $\operatorname{qr}(K_k^2\Omega)$ | rebuild every state |
-| `defl_sketch_q3_recycle_once` | $\operatorname{qr}(K_1^3\Omega)$ | build once |
-| `defl_sketch_q3_fresh_oracle` | $\operatorname{qr}(K_k^3\Omega)$ | rebuild every state |
+| `defl_sketch_q1_recycle_once` | $\mathrm{qr}(K_1\Omega)$ | build once |
+| `defl_sketch_q1_fresh_oracle` | $\mathrm{qr}(K_k\Omega)$ | rebuild every state |
+| `defl_sketch_q2_recycle_once` | $\mathrm{qr}(K_1^2\Omega)$ | build once |
+| `defl_sketch_q2_fresh_oracle` | $\mathrm{qr}(K_k^2\Omega)$ | rebuild every state |
+| `defl_sketch_q3_recycle_once` | $\mathrm{qr}(K_1^3\Omega)$ | build once |
+| `defl_sketch_q3_fresh_oracle` | $\mathrm{qr}(K_k^3\Omega)$ | rebuild every state |
 
 ### Frozen exact Cholesky
 
@@ -491,7 +491,7 @@ A(\sigma_j^2)x_j=y,
 \qquad
 A(\sigma_j^2)=K+\sigma_j^2I,
 \qquad
-\sigma_j^2\in\operatorname{logspace}(-8,0,10).
+\sigma_j^2\in\mathrm{logspace}(-8,0,10).
 ```
 
 This is a prescribed parameter sweep, not an optimization: $x_j$ does not
