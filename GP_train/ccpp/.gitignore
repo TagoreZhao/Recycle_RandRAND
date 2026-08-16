@@ -5,3 +5,5 @@ data/
 results/
 benchmark_sigma2/
 benchmark_sigma2_smoke/
+benchmark_ard_training/
+benchmark_ard_training_smoke/

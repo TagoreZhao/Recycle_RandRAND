@@ -117,7 +117,7 @@ D_e=\frac{|e|}{12}
 \begin{bmatrix}2&1&1\\1&2&1\\1&1&2\end{bmatrix},
 ```
 
-and the two-component velocity mass is $M_2=\operatorname{blkdiag}(D,D)$.
+and the two-component velocity mass is $M_2=\mathrm{blkdiag}(D,D)$.
 
 The discrete divergence $B\in\mathbb R^{N\times2N}$ is
 
@@ -144,7 +144,7 @@ triplets to assemble
 and the vector diffusion block is
 
 ```math
-A_2(\nu^n)=\operatorname{blkdiag}(K_\nu^n,K_\nu^n).
+A_2(\nu^n)=\mathrm{blkdiag}(K_\nu^n,K_\nu^n).
 ```
 
 Unlike the constant-viscosity parent, $K_\nu^n$ and therefore $A_2(\nu^n)$
@@ -312,7 +312,7 @@ For the constant-viscosity parent, $F_n=F_1$ and only the coupling border moves:
 \Delta\widetilde C_n&0
 \end{bmatrix},
 \qquad
-\operatorname{rank}(\mathcal K_n-\mathcal K_1)\le 2n_C.
+\mathrm{rank}(\mathcal K_n-\mathcal K_1)\le 2n_C.
 ```
 
 That low-rank identity supports Woodbury formulas and the parent's
@@ -347,8 +347,8 @@ into one number:
 
 ```math
 \mathtt{dK\_nnz\_frac}_n
-=\frac{\operatorname{nnz}(A_{vel}^n-A_{vel}^{n-1})}
-       {\operatorname{nnz}(A_{vel}^n)},
+=\frac{\mathrm{nnz}(A_{vel}^n-A_{vel}^{n-1})}
+       {\mathrm{nnz}(A_{vel}^n)},
 \qquad
 \mathtt{nu\_contrast}_n
 =\frac{\max_e\nu_e^n}{\min_e\nu_e^n}.
@@ -382,7 +382,7 @@ inverse GMRES arm. There is intentionally **no Krylov-subspace-recycling arm**.
 | key | preconditioner or solve |
 |---|---|
 | `minres_unprec` | none |
-| `block_jacobi` | $\operatorname{blkdiag}(A_{vel},\operatorname{diag}(m/\nu),I_\lambda)$ approximation, rebuilt every step |
+| `block_jacobi` | $\mathrm{blkdiag}(A_{vel},\mathrm{diag}(m/\nu),I_\lambda)$ approximation, rebuilt every step |
 | `block_jacobi_frozen` | the same block preconditioner, frozen at step 1 |
 | `ildl_nofill` | incomplete-LDL split solve, no coarse space |
 | `exact_ldl_frozen` | exact LDL of $\mathcal K_1$, SPD-ified as $|\mathcal K_1|$, then frozen |
@@ -399,7 +399,7 @@ control.
 
 Deflation bases cached across steps are stored in **physical coordinates** and
 transported into the current split coordinates as
-$V_n=\operatorname{orth}(C_n^\mathsf{T}U)$. This transport is required when the
+$V_n=\mathrm{orth}(C_n^\mathsf{T}U)$. This transport is required when the
 ILDL factor is refreshed: reusing the same coordinate array would represent a
 different physical subspace. It is coordinate transport, not Krylov recycling.
 
@@ -423,7 +423,7 @@ E=C_1^{-1}(\mathcal K_n-\mathcal K_1)C_1^{-\mathsf T},
 ```
 
 where $C_1$ is the exact step-1 split factor. Since
-$C_1^{-1}\mathcal K_nC_1^{-\mathsf T}=\operatorname{sign}(D_1)+E$, the sketch
+$C_1^{-1}\mathcal K_nC_1^{-\mathsf T}=\mathrm{sign}(D_1)+E$, the sketch
 uses the power iteration $Y=E^{2q+1}\Omega$ to approximate dominant
 eigendirections of the perturbation actually seen by split MINRES. Its cost is
 reported in operation counts: each application uses one sparse
