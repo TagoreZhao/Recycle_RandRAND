@@ -26,10 +26,12 @@ the target and eight fixed Hutchinson-probe solves for the stochastic trace in
 the marginal-likelihood gradient.
 
 Every solver arm receives the same data split, initialization, probes, and Adam
-configuration, but drives an independent training trajectory. The comparison
-includes unpreconditioned PCG, ichol, AMG, exact deflation, q=1/2/3 sketched
-deflation, and the ichol-split two-level method. Deflation methods have paired
-`recycle_once` and `fresh_oracle` variants.
+configuration, but drives an independent training trajectory. Because these
+kernel matrices are dense, the ARD comparison uses unpreconditioned PCG, one
+exact Cholesky factor built at the initial state and recycled thereafter, exact
+deflation, and q=1/2/3 sketched deflation. Deflation methods have paired
+`recycle_once` and `fresh_oracle` variants; the exact Cholesky arm is recycled
+only.
 
 Run the full benchmark from this directory with:
 
@@ -44,7 +46,7 @@ out = run_ard_training_benchmark('SmokeTest', true);
 ```
 
 The full configuration uses 3,000 training points, 30 optimizer states, 8
-probes, and coarse rank 100. It is intentionally expensive: all 13 training
+probes, and coarse rank 100. It is intentionally expensive: all 10 training
 arms use dense kernel products, and fresh-oracle bases are rebuilt at every
 state.
 
@@ -54,7 +56,9 @@ After training, the benchmark selects the initial state, the state with maximum
 off-diagonal kernel change, and the final state of the fresh exact-deflation
 trajectory. At each representative state it computes the full spectrum and
 reports the **500 smallest-absolute and 500 largest-absolute eigenvalues** of
-both `A` and `L^{-1} A L^{-T}`. Signed eigenvalues are retained in CSV output.
+both `A` and `L_0^{-1} A L_0^{-T}`, where `L_0` is the exact Cholesky factor of
+the initial matrix and remains fixed. Signed eigenvalues are retained in CSV
+output.
 
 It also compares ideal exact deflation using the largest 100 modes, smallest 100
 modes, and a 50+50 two-tail basis. These ablations diagnose which tail should be
@@ -65,7 +69,7 @@ ARD results are written to `benchmark_ard_training/` (or
 
 - `solve_results.csv`, `training_results.csv`, and `summary.csv`
 - `spectrum_values.csv`, `spectrum_summary.csv`, and `spectrum_full.mat`
-- `spectrum_raw_and_ichol.pdf` and `spectrum_tail_ablation.pdf`
+- `spectrum_raw_and_recycled_exact.pdf` and `spectrum_tail_ablation.pdf`
 - training iteration, trajectory, matrix-change, and quality/runtime plots
 - `run_config.{mat,json}` and `benchmark_results.mat`
 

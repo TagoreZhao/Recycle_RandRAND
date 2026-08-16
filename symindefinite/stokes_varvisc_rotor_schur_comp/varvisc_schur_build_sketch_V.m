@@ -8,6 +8,9 @@ function V = varvisc_schur_build_sketch_V(Ainv, n, k, q)
     end
     k = min(k,n);
     Y = src.precond.subspace_iter_plain(Ainv, randn(n,k), q);
+    % This is the sole numerical-range selection in the Schur deflation
+    % path.  Every column returned by orth is passed to deflation_P_apply;
+    % do not add orth_trunc, an SVD cutoff, or requested-rank slicing later.
     V = orth(real(Y));
     if isempty(V)
         error('varvisc_schur_build_sketch_V:emptyBasis', ...

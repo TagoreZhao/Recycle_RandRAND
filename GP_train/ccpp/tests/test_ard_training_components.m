@@ -16,6 +16,16 @@ function test_ard_training_components
     [~, cholFlag] = chol(A);
     assert(cholFlag == 0, 'Kernel system did not admit Cholesky.');
 
+    % The dense exact factor is an exact inverse at the initial state, and
+    % its symmetrically preconditioned initial operator is the identity.
+    L0 = chol(A, 'lower'); testRhs = randn(n, 3);
+    recycledApply = L0' \ (L0 \ testRhs);
+    directApply = A \ testRhs;
+    assert(norm(recycledApply - directApply, 'fro') / norm(directApply, 'fro') < 1e-12);
+    split0 = L0 \ A / L0'; split0 = (split0 + split0') / 2;
+    assert(max(abs(eig(split0, 'vector') - 1)) < 1e-11, ...
+           'Initial recycled-exact split spectrum is not identity.');
+
     % Scaled coordinate probes make the Hutchinson average exactly equal to
     % the trace: (1/n) sum_i (sqrt(n)e_i)' B (sqrt(n)e_i) = trace(B).
     Z = sqrt(n) * eye(n);

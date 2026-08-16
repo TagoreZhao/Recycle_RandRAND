@@ -295,6 +295,15 @@ The `disk_static_nu_const` case is the negative control. Its solid is stationary
 and $\nu\equiv1$, so $A_n$, $D_n$, $C_n$, and $S_n$ remain constant. A frozen
 step-1 inverse is therefore exact for the whole sequence.
 
+The adversarial `disk_static_nu_checkerboard_shift` case isolates the opposite
+regime. Its solid and $C_n$ are stationary, while a smooth 100:1 log-viscosity
+checkerboard translates by half a wavelength. At the final step, every
+high-viscosity region occupies the initial low-viscosity region and vice versa.
+This complementary motion spreads the generalized eigenvalues of
+$(S_n,S_1)$ toward both tails. That is what makes `chol(S_1)` stale: a
+full-rank update or a large Frobenius change alone is insufficient, and a
+uniform rescaling could still be easy for PCG.
+
 ## 5. Solver arms and reuse lifecycles
 
 All arms solve the same scaled Schur right-hand side and use the same warm
@@ -305,7 +314,7 @@ start.
 | `pcg_unprec` | unpreconditioned PCG |
 | `chol` | exact dense `chol(S_1)`, frozen for the sequence |
 | `deflate_exact` | exact 20-dimensional smallest-eigenvector basis of `S_1`, reused in physical coordinates |
-| `deflate_gaussian` | 20-column Gaussian inverse-power sketch of `S_1^{-1}`, reused in physical coordinates |
+| `deflate_gaussian` | Gaussian inverse-power sketch of `S_1^{-1}` with requested width 20, reused in physical coordinates |
 
 Three objects have distinct refresh rules:
 
@@ -330,14 +339,23 @@ The basis lives in the physical coordinates of $S_n$. There is no inner split
 factor and therefore no coordinate transport. No `ichol` or sparse-proxy arm
 is included because the exact Schur complement being studied is dense.
 
+For `deflate_gaussian`, the code applies the requested inverse-power rounds and
+then calls `orth(real(Y))` once to construct $V$. The numerical range returned
+by `orth` is used verbatim: there is no later `orth_trunc`, SVD cutoff,
+rank-revealing QR, column slicing, oversampling reduction, or coordinate
+projection. `deflation_P_apply` forms $V^\mathsf{T}S_nV$ from every returned
+column.
+
 ## 6. Benchmark cases
 
-The Schur study uses the same three cases as the parent benchmark.
+The Schur study retains the parent's three cases and adds one Schur-local
+adversarial case.
 
 | case | solid motion | viscosity field | expected Schur behavior |
 |---|---|---|---|
 | `bar_rotating_nu_orbiting` | rotating bar | orbiting high-contrast blobs and co-rotating striations | strongest full-operator drift |
 | `disk_translating_nu_wake` | translating disk | moving low-viscosity wake | smoother, milder drift |
+| `disk_static_nu_checkerboard_shift` | stationary disk | smooth 100:1 checkerboard shifted by half a wavelength | viscosity-only broad generalized-spectrum drift |
 | `disk_static_nu_const` | stationary disk | $\nu\equiv1$ | constant-operator control |
 
 ## 7. Running the benchmark
@@ -357,7 +375,7 @@ run_all_tests
 
 Smoke mode executes three stress-case steps on an `h0=0.1` mesh without
 changing `Tstep`, so it preserves the production motion. Full runs use
-`h0=0.05`, 60 solves, and all three variable-viscosity cases.
+`h0=0.05`, 60 solves, and all four cases.
 
 Outputs include `all_results.csv`, `speedup_summary.csv`, per-case solver and
 operator-drift plots, cross-case summaries, and `run_config.{mat,json}`.
@@ -379,9 +397,13 @@ The test suite checks the defining Schur properties:
 - `test_varvisc_schur_structure` verifies motion of $A_n$, $D_n$, and the
   pressure-pressure Schur block, as well as failure of the old rank bound;
 - `test_varvisc_schur_drift` distinguishes a stale frozen inverse in moving
-  cases from the exact frozen inverse in the static control; and
+  cases from the exact frozen inverse in the static control;
 - `test_varvisc_schur_projector` checks the Gaussian basis and the symmetry,
-  positive definiteness, and spectral action of the deflation preconditioner.
+  positive definiteness, spectral action, and absence of post-`orth` column
+  removal in the deflation preconditioner; and
+- `test_varvisc_schur_hard_case` verifies viscosity-only complementary drift,
+  broad generalized spectral damage, and strong recycled-Cholesky iteration
+  growth.
 
 The construction is split between three benchmark-local helpers:
 

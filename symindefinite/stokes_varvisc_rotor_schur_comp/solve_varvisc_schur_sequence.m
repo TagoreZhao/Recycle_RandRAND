@@ -153,6 +153,9 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
 
             for vi = 1:numel(variants)
                 key = variants(vi).name;
+                % V is passed through exactly as constructed.  In particular,
+                % the Gaussian arm's single orth(real(Y)) is the only
+                % numerical-range selection; there is no post-orth truncation.
                 V = V_all{vi};
                 Papply = deflation_P_apply(V,S,tau_eff,[],0);
                 [xs,fl,rr,it] = pcg(S,rhs_scaled,params.SOLVER_TOL, ...

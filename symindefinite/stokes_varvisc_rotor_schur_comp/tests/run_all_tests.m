@@ -3,7 +3,8 @@ function run_all_tests()
     thisDir=fileparts(mfilename('fullpath'));
     tests={'test_varvisc_schur_correctness','test_varvisc_schur_pin', ...
         'test_varvisc_schur_structure','test_varvisc_schur_projector', ...
-        'test_varvisc_schur_drift','test_varvisc_schur_registry'};
+        'test_varvisc_schur_drift','test_varvisc_schur_registry', ...
+        'test_varvisc_schur_hard_case'};
     failed={}; t=tic;
     for i=1:numel(tests)
         fprintf('\n================ %s ================\n',tests{i});

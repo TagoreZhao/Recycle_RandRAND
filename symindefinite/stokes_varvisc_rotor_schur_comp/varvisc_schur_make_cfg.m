@@ -28,12 +28,28 @@ function [cfg, msh] = varvisc_schur_make_cfg(case_name, params, msh)
         'Tmax', params.dt * (params.Tstep - 1));
     cases = varvisc_define_case_list(params.dt);
     names = cellfun(@(c) c.name, cases, 'UniformOutput', false);
-    idx = find(strcmp(names, case_name), 1);
-    if isempty(idx)
-        error('varvisc_schur_make_cfg:unknownCase', ...
-              'Unknown case "%s". Available: %s.', case_name, strjoin(names, ', '));
+    hard_case = 'disk_static_nu_checkerboard_shift';
+    if strcmp(case_name, hard_case)
+        % Schur-local adversarial case: retain the static disk so C_n is
+        % constant, but translate a smooth 100:1 checkerboard by half a
+        % wavelength.  The endpoint fields exchange their high/low regions.
+        idx = find(strcmp(names, 'disk_static_nu_const'), 1);
+        mcase = cases{idx}.factory(geo);
+        mcase.nu_lo = 0.02;
+        mcase.nu_hi = 2.0;
+        mcase.nu_fun = @(x,y,t) local_checkerboard_viscosity( ...
+            x,y,t,params.dt,geo.Tmax,mcase.nu_lo,mcase.nu_hi);
+        mcase.is_stress = true;
+    else
+        idx = find(strcmp(names, case_name), 1);
+        if isempty(idx)
+            available = [names, {hard_case}];
+            error('varvisc_schur_make_cfg:unknownCase', ...
+                  'Unknown case "%s". Available: %s.', ...
+                  case_name, strjoin(available, ', '));
+        end
+        mcase = cases{idx}.factory(geo);
     end
-    mcase = cases{idx}.factory(geo);
 
     cfg = struct();
     cfg.mesh = msh;
@@ -48,4 +64,20 @@ function [cfg, msh] = varvisc_schur_make_cfg(case_name, params, msh)
     cfg.is_stress = mcase.is_stress;
     cfg.veldofs = veldofs;
     cfg.velvals = velvals;
+end
+
+function nu = local_checkerboard_viscosity(x,y,t,dt,Tmax,nu_lo,nu_hi)
+%LOCAL_CHECKERBOARD_VISCOSITY  Smooth complementary log-viscosity texture.
+%   The phase is zero at the first solved time t=dt and pi at t=Tmax.  A pi
+%   phase shift negates q, so nu(dt).*nu(Tmax) = nu_lo*nu_hi pointwise.
+
+    alpha = 2;
+    wave_number = 8;
+    duration = max(Tmax-dt, eps(max(Tmax,dt)));
+    progress = min(max((t-dt)/duration,0),1);
+    phase = pi*progress;
+    z = sin(wave_number*x+phase).*sin(wave_number*y);
+    q = tanh(alpha*z)/tanh(alpha);
+    mix = 0.5*(1+q);
+    nu = nu_hi*(nu_lo/nu_hi).^mix;
 end

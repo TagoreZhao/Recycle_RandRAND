@@ -134,9 +134,6 @@ function params = parse_options(thisDir, varargin)
     params.AdamBeta1 = 0.9;
     params.AdamBeta2 = 0.999;
     params.AdamEpsilon = 1e-8;
-    params.icholOpts = struct('type', 'ict', 'droptol', 1e-3, 'michol', 'on');
-    params.amgOpts = struct('maxLevels', 2, 'minCoarseSize', 800, ...
-                            'theta', 0.05, 'omegaInterp', 0);
     if params.SmokeTest
         params.NTrain = min(params.NTrain, 300);
         params.NTest = min(params.NTest, 100);
@@ -159,12 +156,9 @@ end
 function methods = method_registry(params)
     methods = struct('key', {}, 'kind', {}, 'refresh', {}, 'q', {}, 'seed_offset', {});
     methods(end+1) = entry('unprec', 'unprec', 'fresh', 0);
-    methods(end+1) = entry('ichol', 'ichol', 'fresh', 0);
-    methods(end+1) = entry('amg', 'amg', 'fresh', 0);
+    methods(end+1) = entry('exact_chol_recycle_once', 'exact_chol', 'recycle_once', 0);
     methods(end+1) = entry('defl_exact_recycle_once', 'defl_exact', 'recycle_once', 0);
     methods(end+1) = entry('defl_exact_fresh_oracle', 'defl_exact', 'fresh_oracle', 0);
-    methods(end+1) = entry('twolevel_recycle_once', 'twolevel', 'recycle_once', 0);
-    methods(end+1) = entry('twolevel_fresh_oracle', 'twolevel', 'fresh_oracle', 0);
     for q = params.SketchQList(:).'
         methods(end+1) = entry(sprintf('defl_sketch_q%d_recycle_once', q), ...
                                'defl_sketch', 'recycle_once', q); %#ok<AGROW>
@@ -191,7 +185,7 @@ end
 function [solveT, trainT, summary] = train_one_method(method, Xtr, ytr, Xte, yte, ...
         theta, lower, upper, probes, sketchOmega, D2parts, initialNlml, params)
     n = size(Xtr, 1);
-    state = struct('V', []);
+    state = struct('V', [], 'L', []);
     adamM = zeros(size(theta));
     adamV = zeros(size(theta));
     previousA = [];
@@ -332,19 +326,19 @@ function [Mfun, state, setup] = build_step_preconditioner(method, A, Amul, K, ..
         case 'unprec'
             % No setup.
 
-        case 'ichol'
-            [L, ~, setup.ichol_build_time] = build_ichol_robust(A, params.icholOpts);
-            Lt = L'; Mfun = @(r) Lt \ (L \ r);
-
-        case 'amg'
-            [L, ~, setup.ichol_build_time] = build_ichol_robust(A, params.icholOpts);
-            Lt = L'; t = tic;
-            Mfun = src.precond.make_amg_preconditioner(sparse(A), ...
-                'maxLevels', params.amgOpts.maxLevels, ...
-                'minCoarseSize', min(params.amgOpts.minCoarseSize, floor(size(A, 1)/4)), ...
-                'theta', params.amgOpts.theta, 'omegaInterp', params.amgOpts.omegaInterp, ...
-                'fineSmootherL', L, 'fineSmootherLt', Lt);
-            setup.basis_build_time = toc(t);
+        case 'exact_chol'
+            if isempty(state.L)
+                t = tic;
+                [state.L, flag] = chol((A + A') / 2, 'lower');
+                setup.factor_build_time = toc(t);
+                if flag ~= 0
+                    error('run_ard_training_benchmark:cholFailed', ...
+                          'Exact Cholesky failed at state %d (flag=%d).', step, flag);
+                end
+                setup.factor_rebuilt = true;
+            end
+            L0 = state.L;
+            Mfun = @(r) L0' \ (L0 \ r);
 
         case 'defl_exact'
             if rebuild
@@ -367,21 +361,6 @@ function [Mfun, state, setup] = build_step_preconditioner(method, A, Amul, K, ..
             t = tic; Mfun = src.precond.deflation_P_apply(state.V, Amul, params.Tau);
             setup.coarse_build_time = toc(t);
 
-        case 'twolevel'
-            [L, ~, setup.ichol_build_time] = build_ichol_robust(A, params.icholOpts);
-            Lt = L'; Ahat = @(W) L \ (Amul(Lt \ W));
-            if rebuild
-                t = tic;
-                [state.V, ~] = eigs(Ahat, size(A, 1), params.Rank, 'largestabs', ...
-                    'IsFunctionSymmetric', true, 'Tolerance', 1e-6, 'MaxIterations', 5000);
-                [state.V, ~] = qr(real(state.V), 0);
-                setup.basis_build_time = toc(t); setup.basis_rebuilt = true;
-            end
-            t = tic;
-            Papply = src.precond.deflation_P_apply(state.V, Ahat, params.Tau);
-            Mfun = @(r) Lt \ Papply(L \ r);
-            setup.coarse_build_time = toc(t);
-
         otherwise
             error('run_ard_training_benchmark:badMethodKind', 'Unknown kind: %s', method.kind);
     end
@@ -389,9 +368,9 @@ function [Mfun, state, setup] = build_step_preconditioner(method, A, Amul, K, ..
 end
 
 function setup = empty_setup()
-    setup = struct('setup_time', 0, 'ichol_build_time', 0, ...
+    setup = struct('setup_time', 0, 'factor_build_time', 0, ...
                    'basis_build_time', 0, 'coarse_build_time', 0, ...
-                   'basis_rebuilt', false);
+                   'factor_rebuilt', false, 'basis_rebuilt', false);
 end
 
 function row = make_solve_row(method, step, rhsIndex, iterations, flag, relres, ...
@@ -423,9 +402,10 @@ function row = make_training_row(method, step, theta, grad, matrixChange, ...
         'grad_noise_variance', grad(6), 'gradient_norm', norm(grad), ...
         'matrix_relative_change', matrixChange, ...
         'offdiag_kernel_relative_change', offdiagChange, ...
-        'setup_time', setup.setup_time, 'ichol_build_time', setup.ichol_build_time, ...
+        'setup_time', setup.setup_time, 'factor_build_time', setup.factor_build_time, ...
         'basis_build_time', setup.basis_build_time, ...
         'coarse_build_time', setup.coarse_build_time, ...
+        'factor_rebuilt', setup.factor_rebuilt, ...
         'basis_rebuilt', setup.basis_rebuilt, 'completed', completed);
 end
 

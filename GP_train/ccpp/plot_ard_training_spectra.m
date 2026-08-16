@@ -49,8 +49,15 @@ function output = plot_ard_training_spectra(X, trainingResults, params)
     fprintf('\n[Spectrum] canonical=%s snapshots=%d eigenvalues/tail=%d\n', ...
             canonical, numel(selected), tailCount);
 
+    % Build one dense exact factor from the canonical initial state.  This
+    % same L0 is used at every snapshot; it is not refreshed as theta moves.
+    thetaInitial = table_theta(C(1, :));
+    K0 = ard_rbf_kernel(X, exp(thetaInitial(1:4)));
+    A0 = exp(thetaInitial(5)) * K0 + exp(thetaInitial(6)) * eye(n);
+    L0 = chol((A0 + A0') / 2, 'lower');
+
     fullSpectra = repmat(struct('label', "", 'step', NaN, 'theta', [], ...
-        'lambda_A', [], 'lambda_ichol_split', [], 'lambda_defl_none', [], ...
+        'lambda_A', [], 'lambda_recycled_exact_split', [], 'lambda_defl_none', [], ...
         'lambda_defl_large', [], 'lambda_defl_small', [], 'lambda_defl_both', []), ...
         numel(selected), 1);
     valueRows = struct([]); summaryRows = struct([]);
@@ -73,11 +80,10 @@ function output = plot_ard_training_spectra(X, trainingResults, params)
         overlapLarge = norm(initialLarge' * Vlarge, 'fro')^2 / coarseRank;
         overlapSmall = norm(initialLarge' * Vsmall, 'fro')^2 / coarseRank;
 
-        fprintf('  %s (step %d): dense eig(L^{-1} A L^{-T}) ...\n', labels(isnap), row.step);
-        L = build_ichol_robust(A, params.icholOpts);
-        M = L \ A / L'; M = (M + M') / 2;
+        fprintf('  %s (step %d): dense eig(L0^{-1} A L0^{-T}) ...\n', labels(isnap), row.step);
+        M = L0 \ A / L0'; M = (M + M') / 2;
         lambdaM = real(eig(M, 'vector'));
-        warn_negative(lambdaM, sprintf('ichol split/%s', labels(isnap)));
+        warn_negative(lambdaM, sprintf('recycled exact split/%s', labels(isnap)));
 
         lambdaNone = ideal_deflated_spectrum(lambdaA, 'none', coarseRank, params.Tau);
         lambdaLarge = ideal_deflated_spectrum(lambdaA, 'large', coarseRank, params.Tau);
@@ -88,14 +94,14 @@ function output = plot_ard_training_spectra(X, trainingResults, params)
         fullSpectra(isnap).step = row.step;
         fullSpectra(isnap).theta = theta;
         fullSpectra(isnap).lambda_A = lambdaA;
-        fullSpectra(isnap).lambda_ichol_split = lambdaM;
+        fullSpectra(isnap).lambda_recycled_exact_split = lambdaM;
         fullSpectra(isnap).lambda_defl_none = lambdaNone;
         fullSpectra(isnap).lambda_defl_large = lambdaLarge;
         fullSpectra(isnap).lambda_defl_small = lambdaSmall;
         fullSpectra(isnap).lambda_defl_both = lambdaBoth;
 
         spectra = {lambdaA, lambdaM, lambdaNone, lambdaLarge, lambdaSmall, lambdaBoth};
-        names = {"A", "ichol_split", "defl_none", "defl_large", "defl_small", "defl_both"};
+        names = {"A", "recycled_exact_split", "defl_none", "defl_large", "defl_small", "defl_both"};
         for io = 1:numel(spectra)
             tails = extract_spectrum_tails(spectra{io}, tailCount);
             newValues = spectrum_value_rows(labels(isnap), row.step, names{io}, ...
@@ -186,20 +192,23 @@ function render_raw_split(S, tailCount, outDir)
     tl = tiledlayout(fig, 2, nS, 'Padding', 'compact', 'TileSpacing', 'compact');
     for i = 1:nS
         ta = extract_spectrum_tails(S(i).lambda_A, tailCount);
-        tm = extract_spectrum_tails(S(i).lambda_ichol_split, tailCount);
+        tm = extract_spectrum_tails(S(i).lambda_recycled_exact_split, tailCount);
         ax = nexttile(tl, i); hold(ax, 'on');
         semilogy(ax, 1:tailCount, ta.small_abs, '-', 'LineWidth', 1.4, 'DisplayName', 'A');
-        semilogy(ax, 1:tailCount, tm.small_abs, '-', 'LineWidth', 1.4, 'DisplayName', 'L^{-1}AL^{-T}');
+        semilogy(ax, 1:tailCount, tm.small_abs, '-', 'LineWidth', 1.4, 'DisplayName', 'L_0^{-1}AL_0^{-T}');
         format_tail_axes(ax, sprintf('%s: %d smallest |\\lambda|', S(i).label, tailCount));
         ax = nexttile(tl, nS+i); hold(ax, 'on');
         semilogy(ax, 1:tailCount, ta.large_abs, '-', 'LineWidth', 1.4, 'DisplayName', 'A');
-        semilogy(ax, 1:tailCount, tm.large_abs, '-', 'LineWidth', 1.4, 'DisplayName', 'L^{-1}AL^{-T}');
+        semilogy(ax, 1:tailCount, tm.large_abs, '-', 'LineWidth', 1.4, 'DisplayName', 'L_0^{-1}AL_0^{-T}');
         format_tail_axes(ax, sprintf('%s: %d largest |\\lambda|', S(i).label, tailCount));
     end
     lg = legend(nexttile(tl, 1), 'Location', 'best'); lg.Layout.Tile = 'south';
-    title(tl, 'ARD GP spectrum: raw and ichol-split operators');
-    exportgraphics(fig, fullfile(outDir, 'spectrum_raw_and_ichol.pdf'), 'ContentType', 'vector');
+    title(tl, 'ARD GP spectrum: raw and recycled exact-factor operators');
+    exportgraphics(fig, fullfile(outDir, 'spectrum_raw_and_recycled_exact.pdf'), ...
+                   'ContentType', 'vector');
     close(fig);
+    obsolete = fullfile(outDir, 'spectrum_raw_and_ichol.pdf');
+    if exist(obsolete, 'file') == 2, delete(obsolete); end
 end
 
 function render_tail_ablation(S, tailCount, coarseRank, outDir)

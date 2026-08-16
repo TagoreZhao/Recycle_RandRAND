@@ -1,4 +1,4 @@
-function resultsTable = run_kernel_pcg_benchmark(varargin)
+function resultsTable = run_kernel_pcg_benchmark(varargin)l
 %RUN_KERNEL_PCG_BENCHMARK  Benchmark PCG vs PCG+ichol on kernel-ridge systems.
 %   RUN_KERNEL_PCG_BENCHMARK() runs the full benchmark on the UCI Elevators
 %   dataset: for each subset size it sweeps the RBF lengthscale over 20
