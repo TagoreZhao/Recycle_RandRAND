@@ -1,19 +1,188 @@
-% VARVISC_SCHUR_EXTRACT_EXAMPLES  Save reduced operators at steps 1 and 9.
-clearvars; clc;
-add_varvisc_schur_paths(); params = make_varvisc_schur_params();
-steps = [1 9]; cfg = varvisc_schur_make_cfg('bar_rotating_nu_orbiting',params,[]);
-ctx = varvisc_schur_context_init(cfg,params); u = zeros(ctx.nU,1);
-for n = 1:max(steps)
-    st = varvisc_schur_step_operator(ctx,n*params.dt,u);
-    xr = st.K\st.b;
-    if ismember(n,steps)
-        S = st.S; rhs_S = st.rhs_S; keep = st.keep; %#ok<NASGU>
-        y_ref_full = xr(ctx.nU+1:end); y_ref = y_ref_full(keep); %#ok<NASGU>
-        meta = struct('case_name',cfg.case_name,'h0',params.h0,'dt',params.dt, ...
-            'step',n,'nS',st.nS,'nC',st.nC,'pin_node',ctx.pin_node, ...
-            'pin_val',ctx.pin_val,'nu_contrast',max(st.nu_e)/min(st.nu_e)); %#ok<NASGU>
-        save(sprintf('varvisc_schur_example_h0p05_step%02d.mat',n), ...
-             'S','rhs_S','y_ref','keep','meta','-v7.3');
-    end
-    u = xr(1:ctx.nU);
+% VARVISC_SCHUR_EXTRACT_EXAMPLES  Save one Schur system and its exact spectrum.
+%
+% Optional workspace configuration (set before running this script):
+%
+%   EXTRACT_CASE_NAME   benchmark case (default: bar_rotating_nu_orbiting)
+%   EXTRACT_H0          mesh spacing   (default: 0.05)
+%   EXTRACT_STEP        snapshot step  (default: 1)
+%   EXTRACT_OUTPUT_DIR  destination    (default: this script's directory)
+%
+% Example smoke extraction:
+%
+%   EXTRACT_H0 = 0.1; EXTRACT_STEP = 2; varvisc_schur_extract_examples
+%
+% The script marches every preceding step with the full KKT reference solve,
+% then writes a .mat containing S, rhs_S, y_ref, eigenvalues, keep, and meta.
+% A matching *_spectrum.png shows every ordered eigenvalue of the reduced SPD
+% Schur complement.  Generated artifacts are gitignored and regenerable.
+
+clc;
+
+thisFileDir = fileparts(mfilename('fullpath'));
+add_varvisc_schur_paths();
+assert_varvisc_schur_helpers();
+rng(1);
+
+%=========================================================================
+% Configuration
+%=========================================================================
+if ~exist('EXTRACT_CASE_NAME', 'var') || isempty(EXTRACT_CASE_NAME)
+    EXTRACT_CASE_NAME = 'bar_rotating_nu_orbiting';
 end
+if ~exist('EXTRACT_H0', 'var') || isempty(EXTRACT_H0)
+    EXTRACT_H0 = 0.03;
+end
+if ~exist('EXTRACT_STEP', 'var') || isempty(EXTRACT_STEP)
+    EXTRACT_STEP = 1;
+end
+if ~exist('EXTRACT_OUTPUT_DIR', 'var') || isempty(EXTRACT_OUTPUT_DIR)
+    EXTRACT_OUTPUT_DIR = thisFileDir;
+end
+
+EXTRACT_CASE_NAME = char(string(EXTRACT_CASE_NAME));
+EXTRACT_OUTPUT_DIR = char(string(EXTRACT_OUTPUT_DIR));
+validateattributes(EXTRACT_H0, {'numeric'}, ...
+    {'scalar', 'real', 'finite', 'positive'}, mfilename, 'EXTRACT_H0');
+validateattributes(EXTRACT_STEP, {'numeric'}, ...
+    {'scalar', 'real', 'finite', 'integer', 'positive'}, mfilename, ...
+    'EXTRACT_STEP');
+if ~exist(EXTRACT_OUTPUT_DIR, 'dir')
+    mkdir(EXTRACT_OUTPUT_DIR);
+end
+
+params = make_varvisc_schur_params();
+params.h0 = EXTRACT_H0;
+assert(EXTRACT_STEP <= params.Tstep - 1, ...
+    'varvisc_schur_extract_examples:stepOutOfRange', ...
+    'EXTRACT_STEP=%d exceeds the %d solved steps.', ...
+    EXTRACT_STEP, params.Tstep - 1);
+
+hTag = ['h' strrep(sprintf('%.12g', EXTRACT_H0), '.', 'p')];
+stem = sprintf('varvisc_schur_example_%s_%s_step%02d', ...
+    EXTRACT_CASE_NAME, hTag, EXTRACT_STEP);
+matName = [stem '.mat'];
+plotName = [stem '_spectrum.png'];
+matFile = fullfile(EXTRACT_OUTPUT_DIR, matName);
+plotFile = fullfile(EXTRACT_OUTPUT_DIR, plotName);
+
+%=========================================================================
+% March to the selected snapshot
+%=========================================================================
+fprintf('[varvisc_schur_extract] meshing %s at h0=%.3g...\n', ...
+    EXTRACT_CASE_NAME, EXTRACT_H0);
+[cfg, msh] = varvisc_schur_make_cfg(EXTRACT_CASE_NAME, params, []);
+ctx = varvisc_schur_context_init(cfg, params);
+fprintf(['[varvisc_schur_extract] N=%d, nU=%d, nP=%d; marching to ' ...
+         'step %d...\n'], msh.N, ctx.nU, ctx.nP, EXTRACT_STEP);
+
+u_prev = zeros(ctx.nU, 1);
+for n = 1:EXTRACT_STEP
+    tcur = n * params.dt;
+    st = varvisc_schur_step_operator(ctx, tcur, u_prev);
+    x_ref = st.K \ st.b;
+    u_prev = x_ref(1:ctx.nU);
+end
+
+%=========================================================================
+% Validate the extracted system and compute its complete spectrum
+%=========================================================================
+S = st.S;
+rhs_S = st.rhs_S;
+keep = st.keep;
+sym_res = norm(S - S', 'fro') / max(norm(S, 'fro'), eps);
+[R, chol_flag] = chol(S);
+assert(sym_res < 1e-13, ...
+    'varvisc_schur_extract_examples:notSymmetric', ...
+    'S is not symmetric to tolerance (relative residual %.3e).', sym_res);
+assert(chol_flag == 0, ...
+    'varvisc_schur_extract_examples:notPositiveDefinite', ...
+    'The reduced Schur matrix is not positive definite.');
+
+y_ref = R \ (R' \ rhs_S);
+schur_relres = norm(S*y_ref - rhs_S) / max(norm(rhs_S), eps);
+x_schur = st.recover(y_ref);
+relerr_vs_kkt = norm(x_schur - x_ref) / max(norm(x_ref), eps);
+y_kkt = x_ref(ctx.nU+1:end);
+y_kkt = y_kkt(keep);
+y_relerr_vs_kkt = norm(y_ref - y_kkt) / max(norm(y_kkt), eps);
+assert(schur_relres < 1e-10, ...
+    'varvisc_schur_extract_examples:largeResidual', ...
+    'Schur relative residual %.3e exceeds tolerance.', schur_relres);
+assert(relerr_vs_kkt < 1e-10, ...
+    'varvisc_schur_extract_examples:recoveryMismatch', ...
+    'Recovered Schur solution differs from KKT reference by %.3e.', ...
+    relerr_vs_kkt);
+
+raw_eigenvalues = eig(S);
+max_eigen_imag = max(abs(imag(raw_eigenvalues)));
+eigenvalues = sort(real(raw_eigenvalues), 'ascend');
+clear raw_eigenvalues R;
+assert(max_eigen_imag < 1e-12 * max(abs(eigenvalues(end)), 1), ...
+    'varvisc_schur_extract_examples:complexSpectrum', ...
+    'Spectrum has an unexpected imaginary component of %.3e.', ...
+    max_eigen_imag);
+assert(eigenvalues(1) > 0, ...
+    'varvisc_schur_extract_examples:nonpositiveSpectrum', ...
+    'Expected an SPD spectrum, but lambda_min=%.3e.', eigenvalues(1));
+
+%=========================================================================
+% Save the reusable linear system and spectrum
+%=========================================================================
+nu_min = min(st.nu_e);
+nu_max = max(st.nu_e);
+meta = struct( ...
+    'schema_version', 1, ...
+    'case_name', EXTRACT_CASE_NAME, 'geometry', cfg.geometry, ...
+    'h0', params.h0, 'dt', params.dt, 'Tstep', params.Tstep, ...
+    'step', EXTRACT_STEP, 't_snap', tcur, ...
+    'N', ctx.N, 'nU', ctx.nU, 'nP', ctx.nP, ...
+    'nC', st.nC, 'nS', st.nS, 'nS_full', numel(keep), ...
+    'pin_node', ctx.pin_node, 'pin_val', ctx.pin_val, ...
+    'nu_min', nu_min, 'nu_max', nu_max, ...
+    'nu_contrast', nu_max / nu_min, ...
+    'sym_res', sym_res, 'chol_ok', chol_flag == 0, ...
+    'schur_relres', schur_relres, ...
+    'relerr_vs_kkt', relerr_vs_kkt, ...
+    'y_relerr_vs_kkt', y_relerr_vs_kkt, ...
+    'max_eigen_imag', max_eigen_imag, ...
+    'lambda_min', eigenvalues(1), ...
+    'lambda_max', eigenvalues(end), ...
+    'condition_number', eigenvalues(end) / eigenvalues(1), ...
+    'dense_fraction', nnz(abs(S) > 1e-12 * max(abs(S(:)))) / numel(S), ...
+    'bytes_S', numel(S) * 8, ...
+    'mat_file', matName, 'spectrum_plot', plotName, ...
+    'created', char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss')), ...
+    'matlab_version', version);
+
+save(matFile, 'S', 'rhs_S', 'y_ref', 'eigenvalues', 'keep', 'meta', ...
+    '-v7.3', '-nocompression');
+
+%=========================================================================
+% Plot every ordered eigenvalue
+%=========================================================================
+opts = varvisc_schur_fig_defaults();
+fh = figure('Visible', 'off', 'Units', 'inches', ...
+    'Position', [1 1 opts.single_width opts.single_height], 'Color', 'w');
+ax = axes(fh);
+semilogy(ax, 1:numel(eigenvalues), eigenvalues, ...
+    'LineWidth', 1.6, 'Color', [0 .45 .70]);
+xlabel(ax, 'ordered eigenvalue index');
+ylabel(ax, '\lambda_i(S_n)');
+title(ax, sprintf('%s: Schur spectrum, h0=%.3g, step %d', ...
+    EXTRACT_CASE_NAME, EXTRACT_H0, EXTRACT_STEP), 'Interpreter', 'none');
+summaryText = sprintf(['\\lambda_{min} = %.3e\n\\lambda_{max} = %.3e\n' ...
+    '\\kappa_2(S) = %.3e'], meta.lambda_min, meta.lambda_max, ...
+    meta.condition_number);
+text(ax, 0.02, 0.97, summaryText, 'Units', 'normalized', ...
+    'VerticalAlignment', 'top', 'BackgroundColor', 'w', ...
+    'EdgeColor', [.75 .75 .75], 'Margin', 5);
+save_varvisc_schur_figure(fh, plotFile, opts);
+
+d = dir(matFile);
+fprintf(['[varvisc_schur_extract] nS=%d, lambda=[%.3e, %.3e], ' ...
+         'kappa=%.3e, relerr(KKT)=%.1e\n'], ...
+    meta.nS, meta.lambda_min, meta.lambda_max, ...
+    meta.condition_number, meta.relerr_vs_kkt);
+fprintf('[varvisc_schur_extract] wrote %s (%.1f MB)\n', ...
+    matFile, d.bytes/2^20);
+fprintf('[varvisc_schur_extract] wrote %s\n', plotFile);

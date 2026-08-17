@@ -8,7 +8,7 @@ function params = make_varvisc_schur_params()
     params.SOLVER_TOL = 1e-8;
     params.SOLVER_MAXIT = 1e5;
 
-    params.sm_eig = 20;
+    params.sm_eig = 500;
     params.q = 2;
     params.tau = [];
     params.DEFLAT_PREC_REFRESH = 1e6;

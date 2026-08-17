@@ -367,6 +367,13 @@ SMOKE_TEST = true; run_varvisc_schur_recycle
 run_varvisc_schur_recycle
 run_varvisc_schur_spectrum
 run_varvisc_schur_rank
+varvisc_schur_extract_examples  % default: stress case, h0=0.05, step 1
+
+% Optional single-snapshot configuration, set before invoking the script:
+EXTRACT_CASE_NAME = 'disk_translating_nu_wake';
+EXTRACT_H0 = 0.1;
+EXTRACT_STEP = 2;
+EXTRACT_OUTPUT_DIR = tempdir;
 varvisc_schur_extract_examples
 
 cd tests
@@ -380,6 +387,26 @@ changing `Tstep`, so it preserves the production motion. Full runs use
 Outputs include `all_results.csv`, `speedup_summary.csv`, per-case solver and
 operator-drift plots, cross-case summaries, and `run_config.{mat,json}`.
 Generated output directories and example `.mat` files are ignored by git.
+
+`varvisc_schur_extract_examples` marches the full KKT sequence through the
+requested step and writes one
+`varvisc_schur_example_<case>_h<h0>_step<step>.mat` artifact. It contains the
+reduced system `S*y_ref = rhs_S`, the complete ordered `eigenvalues`, the
+logical pin-removal map `keep`, and validation/configuration `meta`. To rebuild
+the full pressure/constraint vector, use:
+
+```matlab
+y = zeros(meta.nS_full,1);
+y(keep) = y_ref;
+y(meta.pin_node) = meta.pin_val;
+```
+
+The matching `<artifact-stem>_spectrum.png` plots every eigenvalue on a
+logarithmic scale and reports `meta.lambda_min`, `meta.lambda_max`, and
+`meta.condition_number`. The extractor uses dense `eig(S)`, so this is the
+complete spectrum rather than an iterative estimate. Before writing either
+file it checks symmetry, Cholesky success, the Schur residual, and recovered
+solution agreement with the parent `K\b` solve.
 
 `run_varvisc_schur_spectrum` additionally writes the actual ordered eigenvalue
 curves to `spectrum/spectrum_raw_vs_prec.png` and

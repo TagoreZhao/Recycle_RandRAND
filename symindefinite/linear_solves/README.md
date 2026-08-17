@@ -17,6 +17,7 @@ MINRES, without re-running the full FEM time-stepping pipeline.
 | `test_two_level_minres.m` | **Additive vs multiplicative** two-level head-to-head on the *same* coarse space (eigvecs of the smoothed operator `Â=C⁻¹AC⁻ᵀ`); `k`/`τ` sweep → `output/two_level_minres.{csv,png}`. |
 | `test_two_level_sketched.m` | **Exact vs sketched** coarse space of the same size `k`, plus a sweep over the power-iteration count `q` → `output/two_level_sketched.{csv,png}`. |
 | `test_two_level_recycle.m` | **Krylov recycling** across two consecutive (perturbed) systems: capture the ILDL-preconditioned residuals of solve 1 for free, append them to the coarse space of solve 2; sweep the recycle count → `output/two_level_recycle.{csv,png}`. |
+| `schur_complement/test_two_sided_deflation_pcg.m` | Sketch both spectral tails of the saved SPD Schur system, concatenate and orthogonalize them, then test two sequential deflations with different `tau` values and the same basis using PCG. |
 
 ## How to run
 
@@ -26,6 +27,7 @@ test_ildl_minres      % builds the preconditioner and runs MINRES
 plot_eigenspectrum    % |lambda| spectrum, raw vs preconditioned (log scale)
 test_deflation_minres % deflation operator as an SPD MINRES preconditioner
 test_two_level_minres % additive vs multiplicative two-level comparison
+run('schur_complement/test_two_sided_deflation_pcg.m') % shared-basis, two-stage PCG deflation
 ```
 
 Outputs land in `output/` (git-ignored). `stokes_kkt_system.mat` is git-ignored
