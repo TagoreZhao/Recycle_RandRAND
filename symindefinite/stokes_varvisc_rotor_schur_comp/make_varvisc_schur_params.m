@@ -9,12 +9,18 @@ function params = make_varvisc_schur_params()
     params.SOLVER_MAXIT = 1e5;
 
     params.sm_eig = 500;
+    params.lg_eig = 500;
     params.q = 2;
     params.tau = [];
-    params.DEFLAT_PREC_REFRESH = 1e6;
+    % Each arm rebuilds at steps 1, 1+R, 1+2R, ... independently.
+    % Inf freezes that arm's step-1 basis.
+    params.DEFLAT_SMALL_PREC_REFRESH = Inf;
+    params.DEFLAT_LARGE_PREC_REFRESH = Inf;
+    params.DEFLAT_BOTH_PREC_REFRESH = Inf;
     params.skip_unprecond = false;
     params.COMPUTE_SPECTRUM = true;
     params.standalone_variants = [ ...
-        struct('name', 'deflate_exact', 'source', 'eig'), ...
-        struct('name', 'deflate_gaussian', 'source', 'gaussian')];
+        struct('name', 'deflate_gaussian',       'source', 'gaussian', 'tail', 'small'), ...
+        struct('name', 'deflate_gaussian_large', 'source', 'gaussian', 'tail', 'large'), ...
+        struct('name', 'deflate_gaussian_both',  'source', 'gaussian', 'tail', 'both')];
 end

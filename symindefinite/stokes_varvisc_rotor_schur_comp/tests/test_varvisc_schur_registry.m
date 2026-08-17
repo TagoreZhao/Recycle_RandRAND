@@ -1,11 +1,22 @@
-% TEST_VARVISC_SCHUR_REGISTRY  End-to-end four-arm smoke test.
+% TEST_VARVISC_SCHUR_REGISTRY  End-to-end Gaussian tail-arm smoke test.
 clear; clc;
 thisDir = fileparts(mfilename('fullpath')); addpath(fileparts(thisDir));
 add_varvisc_schur_paths(); rng(1);
-p=make_varvisc_schur_params(); p.h0=.1; p.max_steps=3; p.sm_eig=20;
+p=make_varvisc_schur_params();
+assert(p.sm_eig==500 && p.lg_eig==500, ...
+       'Default tail widths are not 500+500.');
+assert(isinf(p.DEFLAT_SMALL_PREC_REFRESH) && ...
+       isinf(p.DEFLAT_LARGE_PREC_REFRESH) && ...
+       isinf(p.DEFLAT_BOTH_PREC_REFRESH), ...
+       'Default deflation refresh intervals must be Inf.');
+p.h0=.1; p.max_steps=3; p.sm_eig=20; p.lg_eig=20;
+p.DEFLAT_SMALL_PREC_REFRESH=Inf;
+p.DEFLAT_LARGE_PREC_REFRESH=1;
+p.DEFLAT_BOTH_PREC_REFRESH=2;
 cfg=varvisc_schur_make_cfg('bar_rotating_nu_orbiting',p,[]);
 A=solve_varvisc_schur_sequence(cfg,p,'');
-expected={'pcg_unprec','chol','deflate_exact','deflate_gaussian'};
+expected={'pcg_unprec','chol','deflate_gaussian', ...
+          'deflate_gaussian_large','deflate_gaussian_both'};
 assert(isequal(A.solver_keys(:)',expected),'Unexpected registry ordering.');
 for i=1:numel(expected)
     key=expected{i};
@@ -13,16 +24,41 @@ for i=1:numel(expected)
     assert(max(A.solver_err.(key))<1e-5,'%s solution error too large.',key);
 end
 assert(isequal(A.chol_built_step,1),'Frozen Cholesky was not built once.');
-for key={'deflate_exact','deflate_gaussian'}
-    assert(A.basis_built_step.(key{1})==1,'%s basis was not built once.',key{1});
-    assert(A.deflat_dim.(key{1})>=1 && A.deflat_dim.(key{1})<=p.sm_eig, ...
-           '%s has invalid realized width.',key{1});
-end
-assert(A.deflat_dim.deflate_exact==p.sm_eig, ...
-       'Exact deflation did not retain the requested width.');
+assert(isequal(A.basis_built_step.deflate_gaussian,1), ...
+       'Small-tail arm did not honor refresh interval Inf.');
+assert(isequal(A.basis_built_step.deflate_gaussian_large,[1 2 3]), ...
+       'Large-tail arm did not honor refresh interval 1.');
+assert(isequal(A.basis_built_step.deflate_gaussian_both,[1 3]), ...
+       'Both-tail arm did not honor refresh interval 2.');
 assert(A.deflat_dim.deflate_gaussian==p.sm_eig, ...
-       'Gaussian orth unexpectedly reduced the smoke-test width.');
+       'Small-tail sketch did not retain its requested width.');
+assert(A.deflat_dim.deflate_gaussian_large==p.lg_eig, ...
+       'Large-tail sketch did not retain its requested width.');
+assert(A.deflat_dim.deflate_gaussian_both==p.sm_eig+p.lg_eig, ...
+       'Combined sketch did not retain its requested 2k width.');
+assert(A.deflat_requested_dim.both==40 && A.deflat_tail_dim.both==40, ...
+       'Requested/realized combined dimensions were not recorded.');
 assert(abs(A.tau-A.lambda_max(1))<1e-10*A.lambda_max(1), ...
-       'tau is not lambda_max(S_1).');
+       'Initial small-tail tau is not lambda_max(S_1).');
+assert(abs(A.deflation_tau.small(2)-A.lambda_max(1)) < ...
+       1e-10*A.lambda_max(1), 'Small-tail tau changed without a refresh.');
+assert(abs(A.deflation_tau.small(3)-A.lambda_max(1)) < ...
+       1e-10*A.lambda_max(1), 'Small-tail tau changed without a refresh.');
+assert(max(abs(A.deflation_tau.large([1 3])- ...
+                   A.deflation_tau.both_stage1([1 3]))) < ...
+       1e-12*max(A.deflation_tau.large([1 3])), ...
+       'Large and both-tail shifts disagree at common refresh steps.');
+assert(A.deflation_tau.both_stage1(2)==A.deflation_tau.both_stage1(1), ...
+       'Both-tail shift changed without a basis refresh.');
+
+pbad=p; pbad.DEFLAT_LARGE_PREC_REFRESH=0;
+try
+    solve_varvisc_schur_sequence(cfg,pbad,'');
+    error('test_varvisc_schur_registry:missingRefreshError', ...
+          'Invalid refresh interval was accepted.');
+catch ME
+    assert(strcmp(ME.identifier,'solve_varvisc_schur_sequence:badDeflatRefresh'), ...
+           'Unexpected error for invalid refresh interval: %s',ME.message);
+end
 assert(max(A.vel_recovery_err)<1e-10,'Schur recovery drifted from K\b.');
 fprintf('test_varvisc_schur_registry: ALL ASSERTIONS PASSED\n');

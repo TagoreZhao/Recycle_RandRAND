@@ -313,8 +313,9 @@ start.
 |---|---|
 | `pcg_unprec` | unpreconditioned PCG |
 | `chol` | exact dense `chol(S_1)`, frozen for the sequence |
-| `deflate_exact` | exact 20-dimensional smallest-eigenvector basis of `S_1`, reused in physical coordinates |
-| `deflate_gaussian` | Gaussian inverse-power sketch of `S_1^{-1}` with requested width 20, reused in physical coordinates |
+| `deflate_gaussian` | Gaussian inverse-power sketch for the 500 smallest modes |
+| `deflate_gaussian_large` | Gaussian forward-power sketch for the 500 largest modes |
+| `deflate_gaussian_both` | combined 500+500 Gaussian basis with symmetric two-stage deflation |
 
 Three objects have distinct refresh rules:
 
@@ -323,28 +324,40 @@ Three objects have distinct refresh rules:
 2. The `chol` solver arm deliberately freezes the dense Cholesky of $S_1$ and
    reuses it as a preconditioner for later $S_n$. This is the factor that
    becomes stale in moving-viscosity cases.
-3. Each deflation arm freezes its step-1 basis $V$, while its small Galerkin
-   matrix $V^\mathsf{T}S_nV$ is built from the current Schur matrix.
+3. `DEFLAT_SMALL_PREC_REFRESH`, `DEFLAT_LARGE_PREC_REFRESH`, and
+   `DEFLAT_BOTH_PREC_REFRESH` independently control the three basis
+   lifecycles. Step 1 always builds each basis; a finite value $R$ rebuilds
+   that arm from the current $S_n$ at steps $1,1+R,1+2R,\ldots$. Every
+   parameter defaults to `Inf`, which freezes that arm's step-1 basis. The
+   small Galerkin matrices are always built from the current Schur matrix.
 
-The deflation preconditioner acts directly on the current SPD matrix:
+The one-tail deflation preconditioners act directly on the current SPD matrix:
 
 ```math
 P_n=(I-VV^\mathsf{T})
 +\tau V(V^\mathsf{T}S_nV)^{-1}V^\mathsf{T},
-\qquad
-\tau=\lambda_{\max}(S_1).
+\qquad \tau>0.
 ```
+
+The three arms own independent sketches, so refreshing one never changes
+another arm's basis. The smallest-tail shift is $\lambda_{\max}$ at its most
+recent refresh. The
+largest-tail shift is the upper boundary of the unresolved spectrum. The
+two-tail arm follows `linear_solves/schur_complement/test_two_sided_deflation_pcg.m`:
+it concatenates and orthogonalizes the large and small sketches, then applies
+the symmetric two-stage composition
+$P_1^{1/2}P_2P_1^{1/2}$. Its second shift is the geometric mean of the lower
+and upper unresolved boundaries.
 
 The basis lives in the physical coordinates of $S_n$. There is no inner split
 factor and therefore no coordinate transport. No `ichol` or sparse-proxy arm
 is included because the exact Schur complement being studied is dense.
 
-For `deflate_gaussian`, the code applies the requested inverse-power rounds and
-then calls `orth(real(Y))` once to construct $V$. The numerical range returned
-by `orth` is used verbatim: there is no later `orth_trunc`, SVD cutoff,
-rank-revealing QR, column slicing, oversampling reduction, or coordinate
-projection. `deflation_P_apply` forms $V^\mathsf{T}S_nV$ from every returned
-column.
+Each tail sketch applies the requested power rounds and then calls
+`orth(real(Y))` once. The combined arm calls `orth([Vlarge,Vsmall])` once more.
+There is no later `orth_trunc`, SVD cutoff, rank-revealing QR, oversampling
+reduction, or coordinate projection. Requested widths are capped only when
+necessary to leave at least one unresolved Schur direction.
 
 ## 6. Benchmark cases
 

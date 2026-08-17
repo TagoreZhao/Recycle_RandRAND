@@ -22,6 +22,7 @@ if is_smoke
     params.max_steps = 3;
     params.h0 = 0.1;
     params.sm_eig = 20;
+    params.lg_eig = 20;
     case_names = case_names(1);
     results_root = fullfile(paths.thisDir,'varvisc_schur_recycle_smoke');
 else
@@ -58,13 +59,25 @@ cfg_dump.case_names = case_names;
 cfg_dump.solver_keys = all_stats{1}.solver_keys;
 cfg_dump.solver_labels = all_stats{1}.solver_labels;
 cfg_dump.tau_used = all_stats{1}.tau;
+cfg_dump.deflation_tau = all_stats{1}.deflation_tau;
 cfg_dump.deflat_dim = all_stats{1}.deflat_dim;
+cfg_dump.deflat_dim_history = all_stats{1}.deflat_dim_history;
+cfg_dump.deflat_tail_dim = all_stats{1}.deflat_tail_dim;
+cfg_dump.basis_built_step = all_stats{1}.basis_built_step;
 cfg_dump.mesh_N = msh.N;
 cfg_dump.matlab = version;
 cfg_dump.finished = datestr(now,'yyyy-mm-ddTHH:MM:SS'); %#ok<TNOW1,DATST>
 save(fullfile(results_root,'run_config.mat'),'cfg_dump');
 fid = fopen(fullfile(results_root,'run_config.json'),'w');
 if fid > 0
-    fprintf(fid,'%s',jsonencode(cfg_dump,'PrettyPrint',true)); fclose(fid);
+    json_dump = cfg_dump;
+    refresh_fields = {'DEFLAT_SMALL_PREC_REFRESH', ...
+                      'DEFLAT_LARGE_PREC_REFRESH', ...
+                      'DEFLAT_BOTH_PREC_REFRESH'};
+    for ri = 1:numel(refresh_fields)
+        field = refresh_fields{ri};
+        if isinf(json_dump.(field)), json_dump.(field) = 'Inf'; end
+    end
+    fprintf(fid,'%s',jsonencode(json_dump,'PrettyPrint',true)); fclose(fid);
 end
 fprintf('\n[varvisc_schur] done -> %s\n',results_root);

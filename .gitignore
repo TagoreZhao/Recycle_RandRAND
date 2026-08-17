@@ -10,6 +10,8 @@ symindefinite/stokes_immersed_rotor/*.mat
 # linear_solves preconditioner test bed (regenerated on run)
 symindefinite/linear_solves/output/
 symindefinite/linear_solves/*.mat
+# Local dense Schur example used by the two-sided PCG test (about 30 MB)
+symindefinite/linear_solves/schur_complement/varvisc_schur_example_bar_rotating_nu_orbiting_h0p05_step01.mat
 
 # subspace-recycling diagnosis study (regenerated on run)
 symindefinite/linear_solves/subspace_recycle/*/output/
