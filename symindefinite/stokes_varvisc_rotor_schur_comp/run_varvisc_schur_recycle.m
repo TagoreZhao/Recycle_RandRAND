@@ -53,6 +53,9 @@ write_varvisc_schur_summary(results_root,all_stats,opts);
 cfg_dump = params;
 if isfield(cfg_dump,'standalone_variants')
     cfg_dump.variant_names = {cfg_dump.standalone_variants.name};
+    if isfield(cfg_dump.standalone_variants,'design')
+        cfg_dump.variant_designs = {cfg_dump.standalone_variants.design};
+    end
     cfg_dump = rmfield(cfg_dump,'standalone_variants');
 end
 cfg_dump.case_names = case_names;
@@ -62,8 +65,12 @@ cfg_dump.tau_used = all_stats{1}.tau;
 cfg_dump.deflation_tau = all_stats{1}.deflation_tau;
 cfg_dump.deflat_dim = all_stats{1}.deflat_dim;
 cfg_dump.deflat_dim_history = all_stats{1}.deflat_dim_history;
+cfg_dump.large_basis_dim_history = all_stats{1}.large_basis_dim_history;
 cfg_dump.deflat_tail_dim = all_stats{1}.deflat_tail_dim;
 cfg_dump.basis_built_step = all_stats{1}.basis_built_step;
+cfg_dump.large_basis_built_step = all_stats{1}.large_basis_built_step;
+cfg_dump.small_basis_built_step = all_stats{1}.small_basis_built_step;
+cfg_dump.small_basis_source = all_stats{1}.small_basis_source;
 cfg_dump.mesh_N = msh.N;
 cfg_dump.matlab = version;
 cfg_dump.finished = datestr(now,'yyyy-mm-ddTHH:MM:SS'); %#ok<TNOW1,DATST>
@@ -71,9 +78,11 @@ save(fullfile(results_root,'run_config.mat'),'cfg_dump');
 fid = fopen(fullfile(results_root,'run_config.json'),'w');
 if fid > 0
     json_dump = cfg_dump;
-    refresh_fields = {'DEFLAT_SMALL_PREC_REFRESH', ...
-                      'DEFLAT_LARGE_PREC_REFRESH', ...
-                      'DEFLAT_BOTH_PREC_REFRESH'};
+    refresh_fields = {'SMALL_BASIS_REFRESH', ...
+                      'DEFLAT_GAUSSIAN_LARGE_REFRESH', ...
+                      'DEFLAT_SEQUENTIAL_SHARED_LARGE_REFRESH', ...
+                      'DEFLAT_CONCATENATED_ONCE_LARGE_REFRESH', ...
+                      'DEFLAT_ADAPTIVE_LIFT_LARGE_REFRESH'};
     for ri = 1:numel(refresh_fields)
         field = refresh_fields{ri};
         if isinf(json_dump.(field)), json_dump.(field) = 'Inf'; end

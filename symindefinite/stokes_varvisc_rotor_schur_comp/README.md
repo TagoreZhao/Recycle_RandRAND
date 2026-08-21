@@ -313,23 +313,60 @@ start.
 |---|---|
 | `pcg_unprec` | unpreconditioned PCG |
 | `chol` | exact dense `chol(S_1)`, frozen for the sequence |
-| `deflate_gaussian` | Gaussian inverse-power sketch for the 500 smallest modes |
-| `deflate_gaussian_large` | Gaussian forward-power sketch for the 500 largest modes |
-| `deflate_gaussian_both` | combined 500+500 Gaussian basis with symmetric two-stage deflation |
+| `deflate_shared_small` | direct deflation with the centrally shared smallest-mode basis |
+| `deflate_gaussian_large` | Gaussian forward-power sketch for the largest modes |
+| `deflate_sequential_shared_subspace` | two-stage deflation; the same concatenated small+large basis is used in both stages |
+| `deflate_concatenated_once` | one standard deflator built from the concatenated small+large basis |
+| `deflate_adaptive_small_lift_large` | adaptive small-mode lift followed by large-mode deflation of the lifted operator |
 
-Three objects have distinct refresh rules:
+The default target dimensions are `sm_eig=20` and `lg_eig=50`. Every design
+that uses a small basis receives the same centrally cached `sm_eig`-column
+basis. Every large-tail component independently targets exactly `lg_eig`
+columns, so the sequential, one-shot, standalone-large, and post-lift designs
+have the same requested large dimension. Their random draws remain independent.
+
+The central small source is selected by `small_basis_source`:
+
+- `lanczos` (default) runs fully reorthogonalized Lanczos directly on the
+  current dense Schur matrix. It computes `sm_eig+1` Ritz pairs and retains the
+  first `sm_eig`; no Cholesky factorization of the Schur matrix is used by the
+  Lanczos iteration itself.
+- `inverse_gaussian` applies the exact current Cholesky inverse to a Gaussian
+  block, performs no intermediate reorthogonalization, orthogonalizes once at
+  the end, and Rayleigh--Ritz compresses to `sm_eig` smallest Ritz vectors.
+
+All Gaussian sketches use the multiplicative construction width
+
+```math
+m_{\rm sketch}=\min(n,\lceil
+\texttt{sketch\_oversampling}\,k_{\rm target}\rceil),
+```
+
+with `sketch_oversampling=2` by default. Oversampling changes only construction
+cost: one final orthogonalization and Rayleigh--Ritz extraction return exactly
+the target rank. There is never reorthogonalization between subspace-iteration
+products. Standard large sketches use `q`; the transformed post-lift sketch
+uses `lift_large_q`.
+
+The reusable objects have distinct refresh rules:
 
 1. The Cholesky of $A_n$ used to **construct** the exact current $S_n$ is
    rebuilt every step because viscosity changes $A_n$.
 2. The `chol` solver arm deliberately freezes the dense Cholesky of $S_1$ and
    reuses it as a preconditioner for later $S_n$. This is the factor that
    becomes stale in moving-viscosity cases.
-3. `DEFLAT_SMALL_PREC_REFRESH`, `DEFLAT_LARGE_PREC_REFRESH`, and
-   `DEFLAT_BOTH_PREC_REFRESH` independently control the three basis
-   lifecycles. Step 1 always builds each basis; a finite value $R$ rebuilds
-   that arm from the current $S_n$ at steps $1,1+R,1+2R,\ldots$. Every
-   parameter defaults to `Inf`, which freezes that arm's step-1 basis. The
-   small Galerkin matrices are always built from the current Schur matrix.
+3. `SMALL_BASIS_REFRESH` controls the one shared small basis.
+4. `DEFLAT_GAUSSIAN_LARGE_REFRESH`,
+   `DEFLAT_SEQUENTIAL_SHARED_LARGE_REFRESH`,
+   `DEFLAT_CONCATENATED_ONCE_LARGE_REFRESH`, and
+   `DEFLAT_ADAPTIVE_LIFT_LARGE_REFRESH` independently control the four large
+   caches. Step 1 always builds each enabled object; a finite value $R$
+   rebuilds it at steps $1,1+R,1+2R,\ldots$. Every interval defaults to `Inf`.
+
+A shared-small refresh causes the sequential and one-shot designs to recombine
+their cached large basis with the new small basis. It also forces the adaptive
+post-lift large sketch to rebuild because that sketch acts on a newly lifted
+operator. Refreshing a large-only cache never rebuilds the shared small basis.
 
 The one-tail deflation preconditioners act directly on the current SPD matrix:
 
@@ -339,25 +376,44 @@ P_n=(I-VV^\mathsf{T})
 \qquad \tau>0.
 ```
 
-The three arms own independent sketches, so refreshing one never changes
-another arm's basis. The smallest-tail shift is $\lambda_{\max}$ at its most
-recent refresh. The
-largest-tail shift is the upper boundary of the unresolved spectrum. The
-two-tail arm follows `linear_solves/schur_complement/test_two_sided_deflation_pcg.m`:
-it concatenates and orthogonalizes the large and small sketches, then applies
-the symmetric two-stage composition
-$P_1^{1/2}P_2P_1^{1/2}$. Its second shift is the geometric mean of the lower
-and upper unresolved boundaries.
+Tau selection always uses target dimensions, never oversampled or numerically
+realized sketch dimensions. With sorted eigenvalues of the current Schur matrix,
+
+```math
+\lambda_{\rm lo}=\lambda_{\texttt{sm\_eig}+1},\qquad
+\lambda_{\rm hi}=\lambda_{n-\texttt{lg\_eig}},\qquad
+\tau_\star=\sqrt{\lambda_{\rm lo}\lambda_{\rm hi}}.
+```
+
+The standalone large arm uses $\lambda_{\rm hi}$. The sequential design uses
+$\lambda_{\rm hi}$ in stage one and $\tau_\star$ in stage two. The one-shot
+concatenated deflator and the adaptive post-lift large deflator use
+$\tau_\star$.
+
+For the adaptive design, let $V_s$ be the shared small basis and
+$\widehat\lambda_s=\lambda_{\min}(V_s^\mathsf{T}S V_s)$. Its lift is
+
+```math
+P_{\rm lift}=I+\tau_{\rm lift}^{-1}V_sV_s^\mathsf{T},\qquad
+\tau_{\rm lift}=\frac{\widehat\lambda_s}
+{\lambda_{\max}(S)-\widehat\lambda_s}.
+```
+
+Thus the smallest captured Rayleigh value is mapped exactly to
+$\lambda_{\max}(S)$. For an exact invariant small eigenspace, every captured
+eigenvalue is multiplied by the same factor $1+\tau_{\rm lift}^{-1}$, so the
+lift can create at most `rank(V_s)` eigenvalues above the old spectral maximum.
+The second Gaussian basis is constructed from
+$P_{\rm lift}^{1/2}SP_{\rm lift}^{1/2}$ and deflates those large modes.
+
+By default `lift_tau=[]`, so the formula above is used dynamically. Setting a
+positive scalar overrides it, for example `lift_tau=1e-10`. This is a very
+small tau and therefore a very large lift coefficient
+`1/lift_tau=1e10`; the selected value is cached with the shared small basis.
 
 The basis lives in the physical coordinates of $S_n$. There is no inner split
-factor and therefore no coordinate transport. No `ichol` or sparse-proxy arm
-is included because the exact Schur complement being studied is dense.
-
-Each tail sketch applies the requested power rounds and then calls
-`orth(real(Y))` once. The combined arm calls `orth([Vlarge,Vsmall])` once more.
-There is no later `orth_trunc`, SVD cutoff, rank-revealing QR, oversampling
-reduction, or coordinate projection. Requested widths are capped only when
-necessary to leave at least one unresolved Schur direction.
+No `ichol` or sparse-proxy arm is included because the exact Schur complement
+being studied is dense.
 
 ## 6. Benchmark cases
 

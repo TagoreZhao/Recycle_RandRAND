@@ -389,7 +389,8 @@ without refreshing $L_0$. This is the symmetric operator relevant to the frozen
 exact-factor preconditioner. The output retains the signed values of the 500
 smallest-absolute and 500 largest-absolute eigenvalues (clamped for small
 problems), even though materially negative values should not occur for these SPD
-operators.
+operators. All spectrum figures use a linear spectral-rank axis and a logarithmic
+eigenvalue-magnitude axis.
 
 An idealized rank-100 ablation additionally compares no deflation against exact
 deflation of the largest 100 modes, smallest 100 modes, and a 50-smallest plus

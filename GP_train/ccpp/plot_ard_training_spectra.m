@@ -237,8 +237,11 @@ function render_tail_ablation(S, tailCount, coarseRank, outDir)
 end
 
 function format_tail_axes(ax, titleText)
-    grid(ax, 'on'); box(ax, 'on'); xlabel(ax, 'absolute-tail rank');
-    ylabel(ax, '|\lambda|'); title(ax, titleText, 'Interpreter', 'tex');
+    grid(ax, 'on'); box(ax, 'on');
+    set(ax, 'XScale', 'linear', 'YScale', 'log');
+    xlabel(ax, 'absolute-tail rank');
+    ylabel(ax, '|\lambda| (log scale)');
+    title(ax, titleText, 'Interpreter', 'tex');
 end
 
 function warn_negative(lambda, label)
