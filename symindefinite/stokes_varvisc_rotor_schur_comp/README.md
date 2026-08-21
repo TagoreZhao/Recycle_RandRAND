@@ -320,11 +320,12 @@ start.
 | `deflate_concatenated_once` | one standard deflator built from the concatenated small+large basis |
 | `deflate_adaptive_small_lift_large` | adaptive small-mode lift followed by large-mode deflation of the lifted operator |
 
-The default target dimensions are `sm_eig=20` and `lg_eig=50`. Every design
-that uses a small basis receives the same centrally cached `sm_eig`-column
-basis. Every large-tail component independently targets exactly `lg_eig`
-columns, so the sequential, one-shot, standalone-large, and post-lift designs
-have the same requested large dimension. Their random draws remain independent.
+The default nominal dimensions are `sm_eig=20` and `lg_eig=50`. Lanczos
+returns `sm_eig` small vectors. Every Gaussian construction draws
+`ceil(sketch_oversampling*k)` columns and retains the entire orthogonalized
+basis. With the default `sketch_oversampling=2`, the large-tail bases contain
+`2*lg_eig` vectors and the inverse-Gaussian small basis contains `2*sm_eig`
+vectors. The large-arm random draws remain independent.
 
 The central small source is selected by `small_basis_source`:
 
@@ -334,20 +335,19 @@ The central small source is selected by `small_basis_source`:
   Lanczos iteration itself.
 - `inverse_gaussian` applies the exact current Cholesky inverse to a Gaussian
   block, performs no intermediate reorthogonalization, orthogonalizes once at
-  the end, and Rayleigh--Ritz compresses to `sm_eig` smallest Ritz vectors.
+  the end, and retains every oversampled sketch vector.
 
-All Gaussian sketches use the multiplicative construction width
+All Gaussian sketches use
 
 ```math
-m_{\rm sketch}=\min(n,\lceil
-\texttt{sketch\_oversampling}\,k_{\rm target}\rceil),
+m_{\rm sketch}=\min\!\left(n,
+\left\lceil\texttt{sketch\_oversampling}\,k\right\rceil\right).
 ```
 
-with `sketch_oversampling=2` by default. Oversampling changes only construction
-cost: one final orthogonalization and Rayleigh--Ritz extraction return exactly
-the target rank. There is never reorthogonalization between subspace-iteration
-products. Standard large sketches use `q`; the transformed post-lift sketch
-uses `lift_large_q`.
+The basis is `orth(Y)` with no projected eigendecomposition, Rayleigh--Ritz
+rotation, selection, or truncation. There is never reorthogonalization between
+subspace-iteration products. Standard large sketches use `q`; the transformed
+post-lift sketch uses `lift_large_q`.
 
 The reusable objects have distinct refresh rules:
 
@@ -377,12 +377,24 @@ P_n=(I-VV^\mathsf{T})
 \qquad \tau>0.
 ```
 
-Tau selection always uses target dimensions, never oversampled or numerically
-realized sketch dimensions. With sorted eigenvalues of the current Schur matrix,
+Tau selection uses the actual requested basis widths. Define
 
 ```math
-\lambda_{\rm lo}=\lambda_{\texttt{sm\_eig}+1},\qquad
-\lambda_{\rm hi}=\lambda_{n-\texttt{lg\_eig}},\qquad
+m_s=\begin{cases}
+\texttt{sm\_eig},&\texttt{small\_basis\_source=lanczos},\\
+\left\lceil\alpha\,\texttt{sm\_eig}\right\rceil,
+&\texttt{small\_basis\_source=inverse\_gaussian},
+\end{cases}
+\qquad
+m_l=\left\lceil\alpha\,\texttt{lg\_eig}\right\rceil,
+\quad \alpha=\texttt{sketch\_oversampling}.
+```
+
+With sorted eigenvalues of the current Schur matrix,
+
+```math
+\lambda_{\rm lo}=\lambda_{m_s+1},\qquad
+\lambda_{\rm hi}=\lambda_{n-m_l},\qquad
 \tau_\star=\sqrt{\lambda_{\rm lo}\lambda_{\rm hi}}.
 ```
 

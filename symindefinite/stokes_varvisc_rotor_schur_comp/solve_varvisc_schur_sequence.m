@@ -35,6 +35,7 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
         st = varvisc_schur_step_operator(ctx,tcur,u_prev);
         Sapply = st.apply; rhs = st.rhs_S; nS = st.nS;
         Sdense = []; Rcurrent = [];
+        rawSpectrumRecorded = false;
         Astat.nC(step) = st.nC;
         Astat.nS(step) = nS;
         Astat.nu_contrast(step) = max(st.nu_e)/min(st.nu_e);
@@ -133,6 +134,11 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
             settings.solverMaxit,invApply,[],x0Scaled);
         Astat = local_record(Astat,'chol',step,xs,fl,rr,it, ...
             rhsNorm,y_ref_keep);
+        if settings.plotExtremeEigenvalues
+            cholSpectrumApply = @(X) Rfrozen\(Sapply(Rfrozen'\X));
+            Astat = local_record_extreme_spectrum( ...
+                Astat,'chol',step,cholSpectrumApply,nS,settings);
+        end
         if settings.exactDenseDiagnostics
             Aref = Sdense\Omega;
             Astat.InvRelDiff(step) = norm(invApply(Omega)-Aref,'fro') / ...
@@ -140,19 +146,29 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
         end
 
         if ~isempty(variants)
-            widths = local_two_tail_widths(nS,settings.smEig,settings.lgEig);
+            smallNeeded = local_small_needed(variants);
+            largeNeeded = local_large_needed(variants);
+            widths = local_two_tail_widths( ...
+                nS,local_small_basis_width(settings,smallNeeded), ...
+                local_large_basis_width(settings,largeNeeded));
             [spectrum,~] = local_spectral_summary( ...
                 Sapply,nS,widths,Sdense,settings);
             Astat.lambda_min(step) = spectrum.lambdaMin;
             Astat.lambda_max(step) = spectrum.lambdaMax;
             Astat.kappa(step) = spectrum.lambdaMax/spectrum.lambdaMin;
             Astat.spectrum_is_exact(step) = spectrum.isExact;
+            if settings.plotExtremeEigenvalues && ...
+                    isfield(Astat.system_lambda_min,'pcg_unprec')
+                Astat = local_store_extreme_spectrum( ...
+                    Astat,'pcg_unprec',step,spectrum.lambdaMin, ...
+                    spectrum.lambdaMax,spectrum.flag);
+                rawSpectrumRecorded = true;
+            end
             cutoffs = spectrum.cutoffs;
             Astat.lambda_lo_target(step) = cutoffs.lambdaLo;
             Astat.lambda_hi_target(step) = cutoffs.lambdaHi;
             Astat.tau_star_target(step) = cutoffs.tauStar;
 
-            smallNeeded = local_small_needed(variants);
             smallRefreshed = false;
             refreshSmall = smallNeeded && (isempty(smallState.V) || ...
                 local_refresh_due(step,refresh.small));
@@ -179,8 +195,8 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
             end
 
             [states,Astat] = local_refresh_arm_states( ...
-                states,Astat,Sapply,nS,smallState,smallRefreshed,widths, ...
-                cutoffs,settings,refresh,variants,step);
+                states,Astat,Sapply,nS,smallState,smallRefreshed,cutoffs, ...
+                settings,refresh,variants,step);
             if smallNeeded
                 Astat.lift_tau(step) = smallState.liftTau;
                 Astat.small_basis_dim_history(step) = size(smallState.V,2);
@@ -188,9 +204,11 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
 
             for variantIndex = 1:numel(variants)
                 variant = variants(variantIndex);
-                [Papply,Vdim,largeDim,tauValues,basisStep,largeStep] = ...
+                [Papply,spectralApply,Vdim,largeDim,tauValues, ...
+                    basisStep,largeStep] = ...
                     local_make_preconditioner( ...
-                    variant.design,Sapply,smallState,states);
+                    variant.design,Sapply,smallState,states, ...
+                    settings.plotExtremeEigenvalues);
                 key = variant.name;
                 Astat.deflat_dim.(key) = Vdim;
                 Astat.deflat_dim_history.(key)(step) = Vdim;
@@ -203,6 +221,10 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
                     settings.solverMaxit,Papply,[],x0Scaled);
                 Astat = local_record(Astat,key,step,xs,fl,rr,it, ...
                     rhsNorm,y_ref_keep);
+                if settings.plotExtremeEigenvalues
+                    Astat = local_record_extreme_spectrum( ...
+                        Astat,key,step,spectralApply,nS,settings);
+                end
             end
         elseif settings.computeSpectrum
             widths = struct('small',0,'large',0);
@@ -212,6 +234,19 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
             Astat.lambda_max(step) = spectrum.lambdaMax;
             Astat.kappa(step) = spectrum.lambdaMax/spectrum.lambdaMin;
             Astat.spectrum_is_exact(step) = spectrum.isExact;
+            if settings.plotExtremeEigenvalues && ...
+                    isfield(Astat.system_lambda_min,'pcg_unprec')
+                Astat = local_store_extreme_spectrum( ...
+                    Astat,'pcg_unprec',step,spectrum.lambdaMin, ...
+                    spectrum.lambdaMax,spectrum.flag);
+                rawSpectrumRecorded = true;
+            end
+        end
+
+        if settings.plotExtremeEigenvalues && ~rawSpectrumRecorded && ...
+                isfield(Astat.system_lambda_min,'pcg_unprec')
+            Astat = local_record_extreme_spectrum( ...
+                Astat,'pcg_unprec',step,Sapply,nS,settings);
         end
 
         SPrevApply = Sapply;
@@ -274,12 +309,7 @@ function [spectrum,ev] = local_spectral_summary( ...
         spectrum.lambdaMin = ev(1);
         spectrum.lambdaMax = ev(end);
         spectrum.isExact = true;
-        if widths.small > 0
-            spectrum.cutoffs = local_target_cutoffs(ev,widths);
-        else
-            spectrum.cutoffs = struct( ...
-                'lambdaLo',NaN,'lambdaHi',NaN,'tauStar',NaN);
-        end
+        spectrum.cutoffs = local_target_cutoffs(ev,widths);
         return
     end
 
@@ -298,14 +328,16 @@ function [spectrum,ev] = local_spectral_summary( ...
         error('solve_varvisc_schur_sequence:notSPD', ...
               'The estimated smallest Schur eigenvalue is nonpositive.');
     end
+    spectrum.cutoffs = struct('lambdaLo',NaN,'lambdaHi',NaN,'tauStar',NaN);
     if widths.small > 0
         spectrum.cutoffs.lambdaLo = smallValues(end);
+    end
+    if widths.large > 0
         spectrum.cutoffs.lambdaHi = largeValues(end);
+    end
+    if widths.small > 0 && widths.large > 0
         spectrum.cutoffs.tauStar = sqrt( ...
             spectrum.cutoffs.lambdaLo*spectrum.cutoffs.lambdaHi);
-    else
-        spectrum.cutoffs = struct( ...
-            'lambdaLo',NaN,'lambdaHi',NaN,'tauStar',NaN);
     end
 end
 
@@ -340,12 +372,12 @@ function settings = local_settings(params)
         {'scalar','integer','positive'},mfilename,'params.lg_eig');
     validateattributes(settings.largeQ,{'numeric'}, ...
         {'scalar','integer','nonnegative'},mfilename,'params.q');
+    validateattributes(settings.oversampling,{'numeric'}, ...
+        {'scalar','real','finite','>=',1},mfilename,'params.sketch_oversampling');
     validateattributes(settings.smallQ,{'numeric'}, ...
         {'scalar','integer','nonnegative'},mfilename,'params.small_basis_q');
     validateattributes(settings.liftLargeQ,{'numeric'}, ...
         {'scalar','integer','nonnegative'},mfilename,'params.lift_large_q');
-    validateattributes(settings.oversampling,{'numeric'}, ...
-        {'scalar','real','finite','>=',1},mfilename,'params.sketch_oversampling');
     validateattributes(settings.exactDenseDiagnostics,{'logical','numeric'}, ...
         {'scalar'},mfilename,'params.EXACT_DENSE_DIAGNOSTICS');
     validateattributes(settings.spectralTolerance,{'numeric'}, ...
@@ -426,23 +458,25 @@ end
 
 function label = local_variant_label(design,settings)
     smallDescription = settings.smallSource;
+    smallWidth = local_small_basis_width(settings,true);
+    largeWidth = local_large_basis_width(settings,true);
     switch design
         case 'shared_small'
             label = sprintf('PCG (shared %s small-tail deflation, k=%d)', ...
-                smallDescription,settings.smEig);
+                smallDescription,smallWidth);
         case 'gaussian_large'
             label = sprintf('PCG (Gaussian large-tail deflation, k=%d)', ...
-                settings.lgEig);
+                largeWidth);
         case 'sequential_shared_subspace'
             label = sprintf(['PCG (two-stage shared-subspace deflation, ', ...
-                'k=%d+%d)'],settings.smEig,settings.lgEig);
+                'k=%d+%d)'],smallWidth,largeWidth);
         case 'concatenated_once'
             label = sprintf('PCG (one concatenated two-tail deflator, k=%d+%d)', ...
-                settings.smEig,settings.lgEig);
+                smallWidth,largeWidth);
         case 'adaptive_small_lift_large'
             label = sprintf(['PCG (adaptive small lift plus transformed ', ...
                 'large-tail deflation, k=%d+%d)'], ...
-                settings.smEig,settings.lgEig);
+                smallWidth,largeWidth);
     end
 end
 
@@ -489,9 +523,11 @@ function Astat = local_prealloc(keys,labels,nsteps,settings)
             Astat.large_basis_built_step.(key) = [];
         end
     end
+    smallWidth = local_small_basis_width(settings,true);
+    largeWidth = local_large_basis_width(settings,true);
     Astat.deflat_requested_dim = struct( ...
-        'small',settings.smEig,'large',settings.lgEig, ...
-        'combined',settings.smEig+settings.lgEig);
+        'small',smallWidth,'large',largeWidth, ...
+        'combined',smallWidth+largeWidth);
     Astat.deflat_tail_dim = struct();
     Astat.small_basis_source = settings.smallSource;
     Astat.small_basis_built_step = [];
@@ -552,6 +588,29 @@ function needed = local_small_needed(variants)
     needed = any(~strcmp(designs,'gaussian_large'));
 end
 
+function needed = local_large_needed(variants)
+    designs = {variants.design};
+    needed = any(~strcmp(designs,'shared_small'));
+end
+
+function width = local_small_basis_width(settings,needed)
+    if ~needed
+        width = 0;
+    elseif strcmp(settings.smallSource,'inverse_gaussian')
+        width = ceil(settings.oversampling*settings.smEig);
+    else
+        width = settings.smEig;
+    end
+end
+
+function width = local_large_basis_width(settings,needed)
+    if needed
+        width = ceil(settings.oversampling*settings.lgEig);
+    else
+        width = 0;
+    end
+end
+
 function enabled = local_design_enabled(variants,design)
     enabled = any(strcmp({variants.design},design));
 end
@@ -587,9 +646,10 @@ function smallState = local_build_small_state( ...
             theta = thetaAll(1:kSmall);
             info.computedRank = computedRank;
         case 'inverse_gaussian'
-            [V,theta,info] = gaussian_rayleigh_ritz_basis( ...
-                currentInv,Sapply,nS,kSmall,settings.smallQ, ...
-                settings.oversampling,'smallest');
+            [V,info] = gaussian_subspace_basis( ...
+                currentInv,nS,settings.smEig,settings.smallQ, ...
+                settings.oversampling);
+            theta = [];
     end
 
     E = V'*Sapply(V);
@@ -616,14 +676,13 @@ function smallState = local_build_small_state( ...
 end
 
 function [states,Astat] = local_refresh_arm_states( ...
-        states,Astat,Sapply,nS,smallState,smallRefreshed,widths,cutoffs, ...
+        states,Astat,Sapply,nS,smallState,smallRefreshed,cutoffs, ...
         settings,refresh,variants,step)
     if local_design_enabled(variants,'gaussian_large') && ...
             (isempty(states.gaussian_large.V) || ...
              local_refresh_due(step,refresh.gaussianLarge))
-        [V,~,~] = gaussian_rayleigh_ritz_basis( ...
-            Sapply,Sapply,nS,widths.large,settings.largeQ, ...
-            settings.oversampling,'largest');
+        [V,~] = gaussian_subspace_basis( ...
+            Sapply,nS,settings.lgEig,settings.largeQ,settings.oversampling);
         states.gaussian_large.V = V;
         states.gaussian_large.tau1 = cutoffs.lambdaHi;
         states.gaussian_large.basisBuildStep = step;
@@ -634,9 +693,9 @@ function [states,Astat] = local_refresh_arm_states( ...
         largeRefreshed = isempty(states.sequential_shared_subspace.largeV) || ...
             local_refresh_due(step,refresh.sequential);
         if largeRefreshed
-            [Vlarge,~,~] = gaussian_rayleigh_ritz_basis( ...
-                Sapply,Sapply,nS,widths.large,settings.largeQ, ...
-                settings.oversampling,'largest');
+            [Vlarge,~] = gaussian_subspace_basis( ...
+                Sapply,nS,settings.lgEig,settings.largeQ, ...
+                settings.oversampling);
             states.sequential_shared_subspace.largeV = Vlarge;
             states.sequential_shared_subspace.largeBuildStep = step;
         end
@@ -654,9 +713,9 @@ function [states,Astat] = local_refresh_arm_states( ...
         largeRefreshed = isempty(states.concatenated_once.largeV) || ...
             local_refresh_due(step,refresh.concatenated);
         if largeRefreshed
-            [Vlarge,~,~] = gaussian_rayleigh_ritz_basis( ...
-                Sapply,Sapply,nS,widths.large,settings.largeQ, ...
-                settings.oversampling,'largest');
+            [Vlarge,~] = gaussian_subspace_basis( ...
+                Sapply,nS,settings.lgEig,settings.largeQ, ...
+                settings.oversampling);
             states.concatenated_once.largeV = Vlarge;
             states.concatenated_once.largeBuildStep = step;
         end
@@ -675,9 +734,9 @@ function [states,Astat] = local_refresh_arm_states( ...
             [~,liftHalf] = small_eigenvalue_lift( ...
                 smallState.V,smallState.liftTau);
             transformedApply = @(X) liftHalf(Sapply(liftHalf(X)));
-            [Vlarge,~,~] = gaussian_rayleigh_ritz_basis( ...
-                transformedApply,transformedApply,nS,widths.large, ...
-                settings.liftLargeQ,settings.oversampling,'largest');
+            [Vlarge,~] = gaussian_subspace_basis( ...
+                transformedApply,nS,settings.lgEig,settings.liftLargeQ, ...
+                settings.oversampling);
             states.adaptive_small_lift_large.V = Vlarge;
             states.adaptive_small_lift_large.tau1 = cutoffs.tauStar;
             states.adaptive_small_lift_large.tau2 = smallState.liftTau;
@@ -795,31 +854,27 @@ end
 
 function cutoffs = local_target_cutoffs(ev,widths)
     nS = numel(ev);
-    cutoffs.lambdaLo = ev(widths.small+1);
-    cutoffs.lambdaHi = ev(nS-widths.large);
-    cutoffs.tauStar = sqrt(cutoffs.lambdaLo*cutoffs.lambdaHi);
+    cutoffs = struct('lambdaLo',NaN,'lambdaHi',NaN,'tauStar',NaN);
+    if widths.small > 0, cutoffs.lambdaLo = ev(widths.small+1); end
+    if widths.large > 0, cutoffs.lambdaHi = ev(nS-widths.large); end
+    if widths.small > 0 && widths.large > 0
+        cutoffs.tauStar = sqrt(cutoffs.lambdaLo*cutoffs.lambdaHi);
+    end
 end
 
-function widths = local_two_tail_widths(nS,smRequested,lgRequested)
+function widths = local_two_tail_widths(nS,smallWidth,largeWidth)
     available = nS-1;
-    if available < 2
+    if available < 1
         error('solve_varvisc_schur_sequence:schurTooSmall', ...
-              'Two-tail deflation requires at least a 3-by-3 Schur matrix.');
+              'Deflation requires at least a 2-by-2 Schur matrix.');
     end
-    widths.small = min(smRequested,available);
-    widths.large = min(lgRequested,available);
-    if widths.small+widths.large <= available
-        return
+    widths = struct('small',smallWidth,'large',largeWidth);
+    if smallWidth+largeWidth > available
+        error('solve_varvisc_schur_sequence:deflationTooWide', ...
+              ['Requested small/large basis widths %d+%d exceed the %d ', ...
+               'available nonoverlapping Schur directions.'], ...
+              smallWidth,largeWidth,available);
     end
-    totalRequested = smRequested+lgRequested;
-    widths.small = max(1,min(smRequested, ...
-        floor(available*smRequested/totalRequested)));
-    widths.large = max(1,min(lgRequested,available-widths.small));
-    remaining = available-widths.small-widths.large;
-    addSmall = min(remaining,smRequested-widths.small);
-    widths.small = widths.small+addSmall;
-    remaining = available-widths.small-widths.large;
-    widths.large = widths.large+min(remaining,lgRequested-widths.large);
 end
 
 function Astat = local_record(Astat,key,step,xscaled,fl,rr,it,rhsnorm,yref)
