@@ -29,6 +29,13 @@ function write_varvisc_schur_case_outputs(run_dir, A, opts)
     legend(ax,h,labels,'Interpreter','none','Location','best','FontSize',opts.legendfontsize);
     save_varvisc_schur_figure(fh,fullfile(run_dir,'all_solvers_comparison.png'),opts);
 
+    multi_extreme_curve(run_dir,'plot_smallest_eigenvalues.png', ...
+        steps,A,'system_lambda_min','smallest eigenvalue',sty,opts);
+    multi_extreme_curve(run_dir,'plot_largest_eigenvalues.png', ...
+        steps,A,'system_lambda_max','largest eigenvalue',sty,opts);
+    multi_extreme_curve(run_dir,'plot_preconditioned_kappa.png', ...
+        steps,A,'system_kappa','preconditioned condition number',sty,opts);
+
     stepChange = preferred_field(A,'ReldiffF','ReldiffProbe');
     initialChange = preferred_field(A,'RelInitdiffF','RelInitdiffProbe');
     pressureChange = preferred_field( ...
@@ -53,6 +60,37 @@ function write_varvisc_schur_case_outputs(run_dir, A, opts)
         xlabel(ax,'time step'); ylabel(ax,'kappa(S_n)'); title(ax,[A.case_name ': conditioning'],'Interpreter','none');
         save_varvisc_schur_figure(fh,fullfile(run_dir,'kappa_vs_timestep.png'),opts);
     end
+end
+
+function multi_extreme_curve(run_dir,name,steps,A,fieldName,ylab,sty,opts)
+    if ~isfield(A,fieldName), return; end
+    keys = A.solver_keys; labels = A.solver_labels;
+    finiteCurve = false(numel(keys),1);
+    for i = 1:numel(keys)
+        finiteCurve(i) = isfield(A.(fieldName),keys{i}) && ...
+            any(isfinite(A.(fieldName).(keys{i})));
+    end
+    if ~any(finiteCurve), return; end
+
+    fh = new_fig(opts.multi_width,opts.multi_height); ax = axes(fh);
+    h = gobjects(sum(finiteCurve),1); plottedLabels = cell(sum(finiteCurve),1);
+    plotIndex = 0;
+    for i = 1:numel(keys)
+        if ~finiteCurve(i), continue; end
+        plotIndex = plotIndex+1;
+        values = A.(fieldName).(keys{i});
+        h(plotIndex) = semilogy(ax,steps,max(values,eps), ...
+            'LineWidth',sty(i).linewidth,'Color',sty(i).color, ...
+            'LineStyle',sty(i).linestyle,'Marker',sty(i).marker, ...
+            'MarkerIndices',marker_idx(A.nsteps,opts));
+        hold(ax,'on');
+        plottedLabels{plotIndex} = labels{i};
+    end
+    xlabel(ax,'time step'); ylabel(ax,ylab);
+    title(ax,[A.case_name ': ' ylab ' trajectories'],'Interpreter','none');
+    legend(ax,h,plottedLabels,'Interpreter','none','Location','best', ...
+        'FontSize',opts.legendfontsize);
+    save_varvisc_schur_figure(fh,fullfile(run_dir,name),opts);
 end
 
 function field = preferred_field(A,exactField,probeField)

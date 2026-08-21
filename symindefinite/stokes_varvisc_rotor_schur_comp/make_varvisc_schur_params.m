@@ -10,13 +10,13 @@ function params = make_varvisc_schur_params()
 
     params.sm_eig = 20;
     params.lg_eig = 50;
-    params.q = 1;
+    params.q = 2;
     params.sketch_oversampling = 2;
     params.small_basis_source = 'lanczos';
     params.small_basis_q = 1;
     params.small_basis_lanczos_tol = 1e-12;
     params.small_basis_lanczos_check_every = 10;
-    params.lift_large_q = 1;
+    params.lift_large_q = 2;
     params.lift_tau = 1e-10;
     % params.lift_tau = [];
     params.tau = [];

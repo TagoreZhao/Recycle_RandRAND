@@ -17,6 +17,15 @@ function write_varvisc_schur_all_results(results_root, all_stats)
                 r.([key '_its']) = A.solver_its.(key)(n);
                 r.([key '_flag']) = A.solver_flag.(key)(n);
                 r.([key '_err']) = A.solver_err.(key)(n);
+                r.([key '_lambda_min']) = A.system_lambda_min.(key)(n);
+                r.([key '_lambda_max']) = A.system_lambda_max.(key)(n);
+                r.([key '_kappa_prec']) = A.system_kappa.(key)(n);
+                r.([key '_spectrum_flag']) = ...
+                    A.system_spectrum_flag.(key)(n);
+                r.([key '_spectrum_residual']) = ...
+                    A.system_spectrum_residual.(key)(n);
+                r.([key '_spectrum_is_exact']) = ...
+                    A.system_spectrum_is_exact.(key)(n);
             end
             for i = 1:numel(diagnostics)
                 f = diagnostics{i}; r.(f) = A.(f)(n);

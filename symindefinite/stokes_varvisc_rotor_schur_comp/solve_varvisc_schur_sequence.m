@@ -161,7 +161,7 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
                     isfield(Astat.system_lambda_min,'pcg_unprec')
                 Astat = local_store_extreme_spectrum( ...
                     Astat,'pcg_unprec',step,spectrum.lambdaMin, ...
-                    spectrum.lambdaMax,spectrum.flag);
+                    spectrum.lambdaMax,spectrum.flag,NaN,spectrum.isExact);
                 rawSpectrumRecorded = true;
             end
             cutoffs = spectrum.cutoffs;
@@ -238,7 +238,7 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
                     isfield(Astat.system_lambda_min,'pcg_unprec')
                 Astat = local_store_extreme_spectrum( ...
                     Astat,'pcg_unprec',step,spectrum.lambdaMin, ...
-                    spectrum.lambdaMax,spectrum.flag);
+                    spectrum.lambdaMax,spectrum.flag,NaN,spectrum.isExact);
                 rawSpectrumRecorded = true;
             end
         end
@@ -309,21 +309,27 @@ function [spectrum,ev] = local_spectral_summary( ...
         spectrum.lambdaMin = ev(1);
         spectrum.lambdaMax = ev(end);
         spectrum.isExact = true;
+        spectrum.flag = 0;
         spectrum.cutoffs = local_target_cutoffs(ev,widths);
         return
     end
 
     options = struct('issym',true,'isreal',true, ...
-        'tol',settings.spectralTolerance,'maxit',settings.spectralMaxit);
+        'tol',settings.spectralTolerance,'maxit',settings.spectralMaxit, ...
+        'v0',ones(nS,1)/sqrt(nS));
     smallCount = max(1,widths.small+1);
     largeCount = max(1,widths.large+1);
-    [~,smallValues] = eigs(Sapply,nS,smallCount,'smallestabs',options);
-    [~,largeValues] = eigs(Sapply,nS,largeCount,'largestreal',options);
-    smallValues = sort(real(diag(smallValues)),'ascend');
+    inverseApply = @(X) local_spd_inverse_apply(Sapply,X,settings);
+    [~,smallValues,smallFlag] = eigs( ...
+        inverseApply,nS,smallCount,'largestabs',options);
+    [~,largeValues,largeFlag] = eigs( ...
+        Sapply,nS,largeCount,'largestreal',options);
+    smallValues = sort(1./real(diag(smallValues)),'ascend');
     largeValues = sort(real(diag(largeValues)),'descend');
     spectrum.lambdaMin = smallValues(1);
     spectrum.lambdaMax = largeValues(1);
     spectrum.isExact = false;
+    spectrum.flag = max(smallFlag,largeFlag);
     if spectrum.lambdaMin <= 0
         error('solve_varvisc_schur_sequence:notSPD', ...
               'The estimated smallest Schur eigenvalue is nonpositive.');
@@ -358,6 +364,8 @@ function settings = local_settings(params)
     settings.tauOverride = local_param(params,'tau',[]);
     settings.skipUnpreconditioned = local_param(params,'skip_unprecond',false);
     settings.computeSpectrum = local_param(params,'COMPUTE_SPECTRUM',true);
+    settings.plotExtremeEigenvalues = local_param( ...
+        params,'PLOT_EXTREME_EIGENVALUES',false);
     settings.exactDenseDiagnostics = local_param( ...
         params,'EXACT_DENSE_DIAGNOSTICS',false);
     settings.spectralTolerance = local_param( ...
@@ -380,6 +388,8 @@ function settings = local_settings(params)
         {'scalar','integer','nonnegative'},mfilename,'params.lift_large_q');
     validateattributes(settings.exactDenseDiagnostics,{'logical','numeric'}, ...
         {'scalar'},mfilename,'params.EXACT_DENSE_DIAGNOSTICS');
+    validateattributes(settings.plotExtremeEigenvalues,{'logical','numeric'}, ...
+        {'scalar'},mfilename,'params.PLOT_EXTREME_EIGENVALUES');
     validateattributes(settings.spectralTolerance,{'numeric'}, ...
         {'scalar','real','finite','positive'},mfilename,'params.SPECTRAL_RITZ_TOL');
     validateattributes(settings.spectralMaxit,{'numeric'}, ...
@@ -484,12 +494,24 @@ function Astat = local_prealloc(keys,labels,nsteps,settings)
     Astat.solver_keys = keys(:); Astat.solver_labels = labels(:);
     Astat.solver_its = struct(); Astat.solver_flag = struct();
     Astat.solver_relres = struct(); Astat.solver_err = struct();
+    Astat.system_lambda_min = struct();
+    Astat.system_lambda_max = struct();
+    Astat.system_kappa = struct();
+    Astat.system_spectrum_flag = struct();
+    Astat.system_spectrum_residual = struct();
+    Astat.system_spectrum_is_exact = struct();
     for index = 1:numel(keys)
         key = keys{index};
         Astat.solver_its.(key) = nan(nsteps,1);
         Astat.solver_flag.(key) = nan(nsteps,1);
         Astat.solver_relres.(key) = nan(nsteps,1);
         Astat.solver_err.(key) = nan(nsteps,1);
+        Astat.system_lambda_min.(key) = nan(nsteps,1);
+        Astat.system_lambda_max.(key) = nan(nsteps,1);
+        Astat.system_kappa.(key) = nan(nsteps,1);
+        Astat.system_spectrum_flag.(key) = nan(nsteps,1);
+        Astat.system_spectrum_residual.(key) = nan(nsteps,1);
+        Astat.system_spectrum_is_exact.(key) = false(nsteps,1);
     end
     fields = {'backslash_relres','vel_recovery_err','schur_ref_relres', ...
         'symmetry_res','symmetry_probe_res','chol_flag','ReldiffF', ...
@@ -525,9 +547,12 @@ function Astat = local_prealloc(keys,labels,nsteps,settings)
     end
     smallWidth = local_small_basis_width(settings,true);
     largeWidth = local_large_basis_width(settings,true);
+    adaptiveLargeWidth = local_adaptive_large_basis_width(settings);
     Astat.deflat_requested_dim = struct( ...
         'small',smallWidth,'large',largeWidth, ...
-        'combined',smallWidth+largeWidth);
+        'combined',smallWidth+largeWidth, ...
+        'adaptive_large',adaptiveLargeWidth, ...
+        'adaptive_combined',smallWidth+adaptiveLargeWidth);
     Astat.deflat_tail_dim = struct();
     Astat.small_basis_source = settings.smallSource;
     Astat.small_basis_built_step = [];
@@ -537,6 +562,7 @@ function Astat = local_prealloc(keys,labels,nsteps,settings)
     Astat.chol_built_step = [];
     Astat.dense_materialized_step = [];
     Astat.exact_dense_diagnostics = logical(settings.exactDenseDiagnostics);
+    Astat.plot_extreme_eigenvalues = logical(settings.plotExtremeEigenvalues);
 end
 
 function refresh = local_refresh_intervals(params)
@@ -609,6 +635,10 @@ function width = local_large_basis_width(settings,needed)
     else
         width = 0;
     end
+end
+
+function width = local_adaptive_large_basis_width(settings)
+    width = ceil(settings.oversampling*(settings.smEig+settings.lgEig));
 end
 
 function enabled = local_design_enabled(variants,design)
@@ -735,8 +765,9 @@ function [states,Astat] = local_refresh_arm_states( ...
                 smallState.V,smallState.liftTau);
             transformedApply = @(X) liftHalf(Sapply(liftHalf(X)));
             [Vlarge,~] = gaussian_subspace_basis( ...
-                transformedApply,nS,settings.lgEig,settings.liftLargeQ, ...
-                settings.oversampling);
+                transformedApply,nS,settings.smEig+settings.lgEig, ...
+                settings.liftLargeQ, ...
+                settings.oversampling,true);
             states.adaptive_small_lift_large.V = Vlarge;
             states.adaptive_small_lift_large.tau1 = cutoffs.tauStar;
             states.adaptive_small_lift_large.tau2 = smallState.liftTau;
@@ -764,16 +795,23 @@ function V = local_combine_bases(Vlarge,Vsmall)
     end
 end
 
-function [Papply,Vdim,largeDim,tauValues,basisStep,largeStep] = ...
-        local_make_preconditioner(design,Sapply,smallState,states)
+function [Papply,spectralApply,Vdim,largeDim,tauValues,basisStep,largeStep] = ...
+        local_make_preconditioner( ...
+        design,Sapply,smallState,states,needSpectralApply)
     tauValues = struct('first',NaN,'second',NaN);
     largeDim = 0;
+    spectralApply = [];
     switch design
         case 'shared_small'
             V = smallState.V;
             tauValues.first = smallState.directTau;
             Papply = src.precond.deflation_P_apply( ...
                 V,Sapply,tauValues.first,'handle',0);
+            if needSpectralApply
+                Phalf = src.precond.deflation_Psqrt_apply( ...
+                    V,Sapply,tauValues.first,'handle');
+                spectralApply = @(X) Phalf(Sapply(Phalf(X)));
+            end
             Vdim = size(V,2);
             basisStep = smallState.basisBuildStep;
             largeStep = NaN;
@@ -782,6 +820,11 @@ function [Papply,Vdim,largeDim,tauValues,basisStep,largeStep] = ...
             tauValues.first = state.tau1;
             Papply = src.precond.deflation_P_apply( ...
                 state.V,Sapply,tauValues.first,'handle',0);
+            if needSpectralApply
+                Phalf = src.precond.deflation_Psqrt_apply( ...
+                    state.V,Sapply,tauValues.first,'handle');
+                spectralApply = @(X) Phalf(Sapply(Phalf(X)));
+            end
             Vdim = size(state.V,2); largeDim = Vdim;
             basisStep = state.basisBuildStep;
             largeStep = state.largeBuildStep;
@@ -795,6 +838,11 @@ function [Papply,Vdim,largeDim,tauValues,basisStep,largeStep] = ...
             P2apply = src.precond.deflation_P_apply( ...
                 state.V,S1apply,tauValues.second,'handle',0);
             Papply = @(X) P1half(P2apply(P1half(X)));
+            if needSpectralApply
+                P2half = src.precond.deflation_Psqrt_apply( ...
+                    state.V,S1apply,tauValues.second,'handle');
+                spectralApply = @(X) P2half(S1apply(P2half(X)));
+            end
             Vdim = size(state.V,2);
             largeDim = size(state.largeV,2);
             basisStep = state.basisBuildStep;
@@ -804,6 +852,11 @@ function [Papply,Vdim,largeDim,tauValues,basisStep,largeStep] = ...
             tauValues.first = state.tau1;
             Papply = src.precond.deflation_P_apply( ...
                 state.V,Sapply,tauValues.first,'handle',0);
+            if needSpectralApply
+                Phalf = src.precond.deflation_Psqrt_apply( ...
+                    state.V,Sapply,tauValues.first,'handle');
+                spectralApply = @(X) Phalf(Sapply(Phalf(X)));
+            end
             Vdim = size(state.V,2);
             largeDim = size(state.largeV,2);
             basisStep = state.basisBuildStep;
@@ -818,11 +871,116 @@ function [Papply,Vdim,largeDim,tauValues,basisStep,largeStep] = ...
             P2apply = src.precond.deflation_P_apply( ...
                 state.V,transformedApply,tauValues.second,'handle',0);
             Papply = @(X) liftHalf(P2apply(liftHalf(X)));
+            if needSpectralApply
+                P2half = src.precond.deflation_Psqrt_apply( ...
+                    state.V,transformedApply,tauValues.second,'handle');
+                spectralApply = @(X) P2half( ...
+                    transformedApply(P2half(X)));
+            end
             largeDim = size(state.V,2);
             Vdim = size(smallState.V,2)+largeDim;
             basisStep = state.basisBuildStep;
             largeStep = state.largeBuildStep;
     end
+end
+
+function Astat = local_record_extreme_spectrum( ...
+        Astat,key,step,Aapply,nS,settings)
+    try
+        usedDenseFallback = false;
+        if nS <= 2
+            [lambdaMin,lambdaMax,residual] = ...
+                local_dense_extreme_spectrum(Aapply,nS);
+            usedDenseFallback = true;
+        else
+            try
+                options = struct('issym',true,'isreal',true, ...
+                    'tol',settings.spectralTolerance, ...
+                    'maxit',settings.spectralMaxit, ...
+                    'v0',ones(nS,1)/sqrt(nS));
+                inverseApply = @(X) local_spd_inverse_apply( ...
+                    Aapply,X,settings);
+                [smallVector,inverseSmallValue,smallFlag] = eigs( ...
+                    inverseApply,nS,1,'largestabs',options);
+                [largeVector,largeValue,largeFlag] = eigs( ...
+                    Aapply,nS,1,'largestreal',options);
+                lambdaMin = 1/real(inverseSmallValue(1,1));
+                lambdaMax = real(largeValue(1,1));
+                flag = max(smallFlag,largeFlag);
+                smallImage = Aapply(smallVector);
+                largeImage = Aapply(largeVector);
+                smallResidual = norm(smallImage-lambdaMin*smallVector) / ...
+                    max(norm(smallImage),eps);
+                largeResidual = norm(largeImage-lambdaMax*largeVector) / ...
+                    max(norm(largeImage),eps);
+                residual = max(smallResidual,largeResidual);
+                residualLimit = max(100*settings.spectralTolerance,1e-8);
+                if flag ~= 0 || ~isfinite(residual) || ...
+                        residual > residualLimit
+                    error('solve_varvisc_schur_sequence:badRitzResidual', ...
+                        ['Extreme Ritz solve returned flag %d and ', ...
+                         'residual %.3e.'],flag,residual);
+                end
+            catch iterativeError
+                [lambdaMin,lambdaMax,residual] = ...
+                    local_dense_extreme_spectrum(Aapply,nS);
+                usedDenseFallback = true;
+                warning( ...
+                    'solve_varvisc_schur_sequence:extremeSpectrumDenseFallback', ...
+                    ['Using dense extreme-spectrum fallback for %s at ', ...
+                     'step %d: %s'],key,step,iterativeError.message);
+            end
+        end
+        if ~isfinite(lambdaMin) || ~isfinite(lambdaMax) || lambdaMin <= 0
+            error('solve_varvisc_schur_sequence:badExtremeSpectrum', ...
+                'Invalid extreme eigenvalue estimates for %s.',key);
+        end
+        Astat = local_store_extreme_spectrum( ...
+            Astat,key,step,lambdaMin,lambdaMax,0,residual,usedDenseFallback);
+    catch ME
+        Astat = local_store_extreme_spectrum( ...
+            Astat,key,step,NaN,NaN,-1,NaN,false);
+        warning('solve_varvisc_schur_sequence:extremeSpectrumFailed', ...
+            ['Extreme-eigenvalue estimation failed for %s at step %d: ', ...
+             '%s'],key,step,ME.message);
+    end
+end
+
+function [lambdaMin,lambdaMax,residual] = ...
+        local_dense_extreme_spectrum(Aapply,nS)
+    denseOperator = Aapply(eye(nS));
+    residual = norm(denseOperator-denseOperator','fro') / ...
+        max(norm(denseOperator,'fro'),eps);
+    denseOperator = (denseOperator+denseOperator')/2;
+    values = sort(real(eig(denseOperator)),'ascend');
+    lambdaMin = values(1);
+    lambdaMax = values(end);
+end
+
+function Y = local_spd_inverse_apply(Aapply,X,settings)
+    Y = zeros(size(X),'like',X);
+    for columnIndex = 1:size(X,2)
+        [Y(:,columnIndex),flag,relres] = pcg( ...
+            Aapply,X(:,columnIndex),settings.spectralTolerance, ...
+            settings.spectralMaxit);
+        if flag ~= 0 && relres > 10*settings.spectralTolerance
+            error('solve_varvisc_schur_sequence:inverseApplyFailed', ...
+                ['Nested PCG for smallestabs failed with flag %d and ', ...
+                 'relative residual %.3e.'],flag,relres);
+        end
+    end
+end
+
+function Astat = local_store_extreme_spectrum( ...
+        Astat,key,step,lambdaMin,lambdaMax,flag,residual,isExact)
+    if nargin < 7, residual = NaN; end
+    if nargin < 8, isExact = false; end
+    Astat.system_lambda_min.(key)(step) = lambdaMin;
+    Astat.system_lambda_max.(key)(step) = lambdaMax;
+    Astat.system_kappa.(key)(step) = lambdaMax/lambdaMin;
+    Astat.system_spectrum_flag.(key)(step) = flag;
+    Astat.system_spectrum_residual.(key)(step) = residual;
+    Astat.system_spectrum_is_exact.(key)(step) = isExact;
 end
 
 function Astat = local_record_build_steps( ...

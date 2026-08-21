@@ -324,8 +324,9 @@ The default nominal dimensions are `sm_eig=20` and `lg_eig=50`. Lanczos
 returns `sm_eig` small vectors. Every Gaussian construction draws
 `ceil(sketch_oversampling*k)` columns and retains the entire orthogonalized
 basis. With the default `sketch_oversampling=2`, the large-tail bases contain
-`2*lg_eig` vectors and the inverse-Gaussian small basis contains `2*sm_eig`
-vectors. The large-arm random draws remain independent.
+`2*lg_eig` vectors, the adaptive post-lift large basis contains
+`2*(sm_eig+lg_eig)` vectors, and the inverse-Gaussian small basis contains
+`2*sm_eig` vectors. The large-arm random draws remain independent.
 
 The central small source is selected by `small_basis_source`:
 
@@ -345,9 +346,12 @@ m_{\rm sketch}=\min\!\left(n,
 ```
 
 The basis is `orth(Y)` with no projected eigendecomposition, Rayleigh--Ritz
-rotation, selection, or truncation. There is never reorthogonalization between
-subspace-iteration products. Standard large sketches use `q`; the transformed
-post-lift sketch uses `lift_large_q`.
+rotation, selection, or truncation. Standard sketches do not reorthogonalize
+between subspace-iteration products. The transformed post-lift sketch
+reorthogonalizes after every product because the strong lift can otherwise
+collapse the enlarged block numerically. Standard large sketches use nominal
+rank `k=lg_eig` and power count `q`; the post-lift sketch uses nominal rank
+`k=sm_eig+lg_eig` and power count `lift_large_q`.
 
 The reusable objects have distinct refresh rules:
 
@@ -417,7 +421,11 @@ $\lambda_{\max}(S)$. For an exact invariant small eigenspace, every captured
 eigenvalue is multiplied by the same factor $1+\tau_{\rm lift}^{-1}$, so the
 lift can create at most `rank(V_s)` eigenvalues above the old spectral maximum.
 The second Gaussian basis is constructed from
-$P_{\rm lift}^{1/2}SP_{\rm lift}^{1/2}$ and deflates those large modes.
+$P_{\rm lift}^{1/2}SP_{\rm lift}^{1/2}$ and deflates those large modes. Its
+sketch width is
+$\min(n,\lceil\alpha(\texttt{sm\_eig}+\texttt{lg\_eig})\rceil)$ so it has
+room for both the lifted small tail and the original large tail. The
+$\tau_\star$ cutoff continues to use $m_s$ and $m_l$ above.
 
 By default `lift_tau=[]`, so the formula above is used dynamically. Setting a
 positive scalar overrides it, for example `lift_tau=1e-10`. This is a very
@@ -436,6 +444,19 @@ check by explicitly materializing every required $S_n$. The dedicated spectrum,
 rank, and extraction scripts always request dense matrices because exact dense
 quantities are their purpose. `Astat.dense_materialized_step` records every
 time step at which the main sequence requested a dense matrix.
+
+Setting `PLOT_EXTREME_EIGENVALUES=true` enables two additional matrix-free
+Ritz estimates for every configured linear system and time step. The estimates
+come from each symmetric two-sided preconditioned operator, so they represent
+the spectrum relevant to PCG rather than the generally nonsymmetric product
+`P*S`. The option is disabled by default because its cost scales with the
+number of solver arms. It reuses `SPECTRAL_RITZ_TOL` and
+`SPECTRAL_RITZ_MAXIT`. The smallest-magnitude estimate is computed from the
+largest-magnitude Ritz value of the inverse operator and then reciprocated.
+Both extreme eigenpairs receive a residual check; a failed iterative estimate
+falls back to a dense symmetric eigensolve. The statistics include the two
+extremes, their ratio, the maximum Ritz residual, and whether dense fallback
+was used.
 
 ## 6. Benchmark cases
 
@@ -460,6 +481,12 @@ run_varvisc_schur_spectrum
 run_varvisc_schur_rank
 varvisc_schur_extract_examples  % default: stress case, h0=0.05, step 1
 
+% Adaptive-deflator tuning (expensive production sweep):
+run_varvisc_schur_adaptive_tuning
+
+% Fast workflow check:
+run_varvisc_schur_adaptive_tuning(struct('smoke',true))
+
 % Optional single-snapshot configuration, set before invoking the script:
 EXTRACT_CASE_NAME = 'disk_translating_nu_wake';
 EXTRACT_H0 = 0.1;
@@ -476,8 +503,29 @@ changing `Tstep`, so it preserves the production motion. Full runs use
 `h0=0.05`, 60 solves, and all four cases.
 
 Outputs include `all_results.csv`, `speedup_summary.csv`, per-case solver and
-operator-drift plots, cross-case summaries, and `run_config.{mat,json}`.
+operator-drift plots, cross-case summaries, and `run_config.{mat,json}`. When
+`PLOT_EXTREME_EIGENVALUES=true`, each case also writes
+`plot_smallest_eigenvalues.png`, `plot_largest_eigenvalues.png`, and
+`plot_preconditioned_kappa.png`, with one trajectory per configured system.
+The master CSV receives matching `<solver>_lambda_min`,
+`<solver>_lambda_max`, `<solver>_kappa_prec`, `<solver>_spectrum_flag`,
+`<solver>_spectrum_residual`, and `<solver>_spectrum_is_exact` columns, and
+`replot_varvisc_schur` recreates all three figures from those columns.
 Generated output directories and example `.mat` files are ignored by git.
+
+`run_varvisc_schur_adaptive_tuning` tunes only the existing adaptive knobs on
+`disk_static_nu_checkerboard_shift`, while preserving the production
+20-small/140-post-lift effective dimensions. It screens dynamic tau, the current
+`1e-10` override, and fixed multiples of the step-1 dynamic tau together with
+`lift_large_q=[0,1,2]`. Both the small basis and adaptive transformed-large
+basis remain frozen with refresh interval `Inf` in every candidate. The coarse
+`h0=0.1` stage promotes six candidates to the full
+`h0=0.05`, 60-step stage. The winner has the smallest worst-timestep
+preconditioned condition number; candidates within one percent use total PCG
+iterations as the tie-breaker. CSV files retain both summaries and per-step
+spectra, and `recommended_config.json` records the selected existing-knob
+settings. This is the best tested configuration for the hard-drift case, not a
+claim of a global optimum.
 
 `varvisc_schur_extract_examples` marches the full KKT sequence through the
 requested step and writes one
@@ -522,7 +570,11 @@ The test suite checks the defining Schur properties:
   removal in the deflation preconditioner; and
 - `test_varvisc_schur_hard_case` verifies viscosity-only complementary drift,
   broad generalized spectral damage, and strong recycled-Cholesky iteration
-  growth.
+  growth;
+- `test_varvisc_schur_extreme_eigenvalues` validates the symmetric
+  preconditioned extrema, residuals, CSV columns, and plots; and
+- `test_varvisc_schur_adaptive_tuning` exercises the two-stage workflow and
+  its recommendation artifacts in smoke mode.
 
 The construction is split between three benchmark-local helpers:
 
