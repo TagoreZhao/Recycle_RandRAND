@@ -13,5 +13,6 @@ assert(abs(Sfull(pin,pin)+1)<1e-12,'Pinned diagonal is not -1.');
 assert(norm(row,inf)<1e-12,'Pinned direction is coupled.');
 ev = eig(Sfull); assert(sum(ev<0)==1,'Expected exactly one negative eigenvalue.');
 Smanual = Sfull(st.keep,st.keep);
-assert(norm(st.S-Smanual,'fro')<1e-13*norm(st.S,'fro'),'Pin deletion is inconsistent.');
+S = st.to_dense();
+assert(norm(S-Smanual,'fro')<1e-13*norm(S,'fro'),'Pin deletion is inconsistent.');
 fprintf('test_varvisc_schur_pin: ALL ASSERTIONS PASSED\n');

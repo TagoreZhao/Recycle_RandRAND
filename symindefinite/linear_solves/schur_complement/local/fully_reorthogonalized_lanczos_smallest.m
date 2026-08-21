@@ -1,12 +1,22 @@
 function [V, theta, info] = fully_reorthogonalized_lanczos_smallest(A, k, options)
 %FULLY_REORTHOGONALIZED_LANCZOS_SMALLEST  Stable smallest Ritz pairs.
-%   This routine uses only products with the symmetric matrix A. It does not
-%   factor A. Two full modified-Gram-Schmidt passes are applied at every
-%   Lanczos step before the next vector is accepted.
+%   A may be a numeric matrix or a function handle Afun(X)=A*X. Function
+%   handles require OPTIONS.dimension. The routine never factors A.
 
-    validateattributes(A, {'numeric'}, {'2d','square','real','finite'});
     validateattributes(k, {'numeric'}, {'scalar','integer','positive'});
-    n = size(A,1);
+    if isnumeric(A)
+        validateattributes(A, {'numeric'}, {'2d','square','real','finite'});
+        n = size(A,1);
+        defaultOperatorNorm = norm(A,2);
+    elseif isa(A,'function_handle')
+        n = local_option(options,'dimension',[]);
+        validateattributes(n,{'numeric'},{'scalar','integer','positive'}, ...
+            mfilename,'options.dimension');
+        defaultOperatorNorm = [];
+    else
+        error('fully_reorthogonalized_lanczos_smallest:badOperator', ...
+              'A must be a numeric matrix or a function handle.');
+    end
     if k > n
         error('fully_reorthogonalized_lanczos_smallest:rankTooLarge', ...
               'k=%d exceeds the matrix dimension n=%d.', k, n);
@@ -15,7 +25,11 @@ function [V, theta, info] = fully_reorthogonalized_lanczos_smallest(A, k, option
     maxSteps = min(local_option(options,'maxSteps',n), n);
     checkEvery = max(1, local_option(options,'checkEvery',10));
     tolerance = local_option(options,'tolerance',1e-12);
-    operatorNorm = local_option(options,'operatorNorm',norm(A,2));
+    operatorNorm = local_option(options,'operatorNorm',defaultOperatorNorm);
+    if isempty(operatorNorm)
+        error('fully_reorthogonalized_lanczos_smallest:missingOperatorNorm', ...
+              'Function-handle input requires options.operatorNorm.');
+    end
     if maxSteps < k
         error('fully_reorthogonalized_lanczos_smallest:tooFewSteps', ...
               'maxSteps must be at least k.');
@@ -34,7 +48,7 @@ function [V, theta, info] = fully_reorthogonalized_lanczos_smallest(A, k, option
 
     for step = 1:maxSteps
         Q(:,step) = q;
-        residual = A*q-betaPrevious*qPrevious;
+        residual = local_apply(A,q)-betaPrevious*qPrevious;
         alpha(step) = q'*residual;
         residual = residual-alpha(step)*q;
 
@@ -101,11 +115,19 @@ end
 function [V,theta,relativeResiduals] = local_refine_ritz_pairs( ...
         A,candidate,operatorNorm)
     basis = orth(candidate);
-    projected = basis'*(A*basis);
+    projected = basis'*local_apply(A,basis);
     projected = (projected+projected')/2;
     [rotation,values] = eig(projected);
     [theta,order] = sort(real(diag(values)),'ascend');
     V = basis*rotation(:,order);
-    AV = A*V;
+    AV = local_apply(A,V);
     relativeResiduals = vecnorm(AV-V.*theta',2,1)'/max(operatorNorm,eps);
+end
+
+function Y = local_apply(A,X)
+    if isa(A,'function_handle')
+        Y = A(X);
+    else
+        Y = A*X;
+    end
 end

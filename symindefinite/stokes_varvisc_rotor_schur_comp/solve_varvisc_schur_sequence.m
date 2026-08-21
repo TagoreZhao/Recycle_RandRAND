@@ -1,5 +1,5 @@
 function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
-%SOLVE_VARVISC_SCHUR_SEQUENCE  PCG benchmark on dense Schur complements.
+%SOLVE_VARVISC_SCHUR_SEQUENCE  PCG benchmark on Schur operator handles.
 %   All two-tail designs share one centrally refreshed smallest-mode basis.
 %   Each design that needs a largest-mode sketch owns an independent cache.
 
@@ -22,38 +22,46 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
     u_prev = zeros(ctx.nU,1);
     if isfield(cfg,'u0') && ~isempty(cfg.u0), u_prev = cfg.u0; end
     y_prev = [];
-    S_first = []; S_prev = []; A_prev = []; D_prev = []; C_prev = [];
+    SFirstApply = []; SPrevApply = []; nSFirst = -1;
+    SFirstDense = []; SPrevDense = [];
+    A_prev = []; D_prev = []; C_prev = [];
     Rfrozen = []; invApply = []; nS_frozen = -1; Omega = [];
+    pressureOmega = [];
     smallState = local_empty_small_state();
     states = local_empty_arm_states();
 
     for step = 1:nsteps
         tcur = step*params.dt;
         st = varvisc_schur_step_operator(ctx,tcur,u_prev);
-        S = st.S; rhs = st.rhs_S; nS = st.nS;
+        Sapply = st.apply; rhs = st.rhs_S; nS = st.nS;
+        Sdense = []; Rcurrent = [];
         Astat.nC(step) = st.nC;
         Astat.nS(step) = nS;
         Astat.nu_contrast(step) = max(st.nu_e)/min(st.nu_e);
 
-        if isempty(S_first)
-            S_first = S;
+        if isempty(SFirstApply)
+            SFirstApply = Sapply;
+            nSFirst = nS;
             Omega = randn(nS,10)/sqrt(10);
-        elseif size(S_first,1) ~= nS
+            pressureOmega = randn(ctx.nP-1,min(10,ctx.nP-1))/sqrt(10);
+        elseif nSFirst ~= nS
             error('solve_varvisc_schur_sequence:changingSize', ...
                   'Schur dimension changed from %d to %d at step %d.', ...
-                  size(S_first,1),nS,step);
+                  nSFirst,nS,step);
         end
 
-        if ~isempty(S_prev)
-            Astat.ReldiffF(step) = local_normalized_change(S,S_prev);
+        Astat.RelInitdiffProbe(step) = ...
+            local_operator_change(Sapply,SFirstApply,Omega);
+        Astat.symmetry_probe_res(step) = local_symmetry_probe(Sapply,Omega);
+        if ~isempty(SPrevApply)
+            Astat.ReldiffProbe(step) = ...
+                local_operator_change(Sapply,SPrevApply,Omega);
             Astat.A_change(step) = local_normalized_change(st.A_bc,A_prev);
             Astat.D_change(step) = local_normalized_change(st.D,D_prev);
-            Spp = S(1:ctx.nP-1,1:ctx.nP-1);
-            SppPrev = S_prev(1:ctx.nP-1,1:ctx.nP-1);
-            Astat.pressure_schur_change(step) = ...
-                local_normalized_change(Spp,SppPrev);
+            Astat.pressure_schur_change_probe(step) = ...
+                local_pressure_operator_change( ...
+                Sapply,SPrevApply,pressureOmega,nS,ctx.nP-1);
         end
-        Astat.RelInitdiffF(step) = local_normalized_change(S,S_first);
         if ~isempty(C_prev) && isequal(size(C_prev),size(st.C))
             Astat.coupling_change(step) = norm(st.C-C_prev,'fro') / ...
                 max(norm(C_prev,'fro'),eps);
@@ -64,20 +72,32 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
             norm(st.K*x_ref-st.b)/max(norm(st.b),eps);
         y_ref = x_ref(ctx.nU+1:end);
         y_ref_keep = y_ref(st.keep);
-        x_schur = st.recover(S\rhs);
+        x_schur = st.recover(y_ref_keep);
         Astat.vel_recovery_err(step) = ...
             norm(x_schur-x_ref)/max(norm(x_ref),eps);
-        Astat.symmetry_res(step) = norm(S-S','fro')/max(norm(S,'fro'),eps);
-        [Rcurrent,Astat.chol_flag(step)] = chol(S,'lower');
+        Astat.schur_ref_relres(step) = ...
+            norm(Sapply(y_ref_keep)-rhs)/max(norm(rhs),eps);
 
-        needDeflationSpectrum = ~isempty(variants);
-        if settings.computeSpectrum || needDeflationSpectrum
-            ev = sort(real(eig(S)),'ascend');
-            Astat.lambda_min(step) = ev(1);
-            Astat.lambda_max(step) = ev(end);
-            Astat.kappa(step) = ev(end)/ev(1);
-        else
-            ev = [];
+        if settings.exactDenseDiagnostics
+            [Sdense,Astat] = local_require_dense(Sdense,st,Astat,step);
+            if isempty(SFirstDense), SFirstDense = Sdense; end
+            Astat.RelInitdiffF(step) = ...
+                local_normalized_change(Sdense,SFirstDense);
+            Astat.symmetry_res(step) = ...
+                norm(Sdense-Sdense','fro')/max(norm(Sdense,'fro'),eps);
+            if ~isempty(SPrevDense)
+                Astat.ReldiffF(step) = ...
+                    local_normalized_change(Sdense,SPrevDense);
+                Spp = Sdense(1:ctx.nP-1,1:ctx.nP-1);
+                SppPrev = SPrevDense(1:ctx.nP-1,1:ctx.nP-1);
+                Astat.pressure_schur_change(step) = ...
+                    local_normalized_change(Spp,SppPrev);
+            end
+            [Rcurrent,Astat.chol_flag(step)] = chol(Sdense,'lower');
+            if Astat.chol_flag(step) ~= 0
+                error('solve_varvisc_schur_sequence:notSPD', ...
+                      'chol(S) failed at step %d.',step);
+            end
         end
 
         if isempty(y_prev), x0 = zeros(nS,1); else, x0 = y_prev; end
@@ -86,18 +106,22 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
         x0Scaled = x0/rhsNorm;
 
         if ~settings.skipUnpreconditioned
-            [xs,fl,rr,it] = pcg(S,rhsScaled,settings.solverTol, ...
+            [xs,fl,rr,it] = pcg(Sapply,rhsScaled,settings.solverTol, ...
                 settings.solverMaxit,[],[],x0Scaled);
             Astat = local_record(Astat,'pcg_unprec',step,xs,fl,rr,it, ...
                 rhsNorm,y_ref_keep);
         end
 
         if isempty(Rfrozen)
-            Rfrozen = Rcurrent;
+            [Sdense,Astat] = local_require_dense(Sdense,st,Astat,step);
+            if isempty(Rcurrent)
+                [Rcurrent,Astat.chol_flag(step)] = chol(Sdense,'lower');
+            end
             if Astat.chol_flag(step) ~= 0
                 error('solve_varvisc_schur_sequence:notSPD', ...
                       'chol(S) failed at step %d.',step);
             end
+            Rfrozen = Rcurrent;
             invApply = @(X) Rfrozen'\(Rfrozen\X);
             nS_frozen = nS;
             Astat.chol_built_step(end+1) = step;
@@ -105,32 +129,48 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
             error('solve_varvisc_schur_sequence:changingFrozenSize', ...
                   'Cannot reuse frozen factors after a dimension change.');
         end
-        [xs,fl,rr,it] = pcg(S,rhsScaled,settings.solverTol, ...
+        [xs,fl,rr,it] = pcg(Sapply,rhsScaled,settings.solverTol, ...
             settings.solverMaxit,invApply,[],x0Scaled);
         Astat = local_record(Astat,'chol',step,xs,fl,rr,it, ...
             rhsNorm,y_ref_keep);
-        Aref = S\Omega;
-        Astat.InvRelDiff(step) = norm(invApply(Omega)-Aref,'fro') / ...
-            max(norm(Aref,'fro'),eps);
+        if settings.exactDenseDiagnostics
+            Aref = Sdense\Omega;
+            Astat.InvRelDiff(step) = norm(invApply(Omega)-Aref,'fro') / ...
+                max(norm(Aref,'fro'),eps);
+        end
 
         if ~isempty(variants)
-            if Astat.chol_flag(step) ~= 0
-                error('solve_varvisc_schur_sequence:notSPD', ...
-                      'Cannot construct deflation from non-SPD S at step %d.',step);
-            end
             widths = local_two_tail_widths(nS,settings.smEig,settings.lgEig);
-            cutoffs = local_target_cutoffs(ev,widths);
+            [spectrum,~] = local_spectral_summary( ...
+                Sapply,nS,widths,Sdense,settings);
+            Astat.lambda_min(step) = spectrum.lambdaMin;
+            Astat.lambda_max(step) = spectrum.lambdaMax;
+            Astat.kappa(step) = spectrum.lambdaMax/spectrum.lambdaMin;
+            Astat.spectrum_is_exact(step) = spectrum.isExact;
+            cutoffs = spectrum.cutoffs;
             Astat.lambda_lo_target(step) = cutoffs.lambdaLo;
             Astat.lambda_hi_target(step) = cutoffs.lambdaHi;
             Astat.tau_star_target(step) = cutoffs.tauStar;
-            currentInv = @(X) Rcurrent'\(Rcurrent\X);
 
             smallNeeded = local_small_needed(variants);
             smallRefreshed = false;
-            if smallNeeded && (isempty(smallState.V) || ...
-                    local_refresh_due(step,refresh.small))
+            refreshSmall = smallNeeded && (isempty(smallState.V) || ...
+                local_refresh_due(step,refresh.small));
+            currentInv = [];
+            if refreshSmall && strcmp(settings.smallSource,'inverse_gaussian')
+                [Sdense,Astat] = local_require_dense(Sdense,st,Astat,step);
+                if isempty(Rcurrent)
+                    [Rcurrent,Astat.chol_flag(step)] = chol(Sdense,'lower');
+                end
+                if Astat.chol_flag(step) ~= 0
+                    error('solve_varvisc_schur_sequence:notSPD', ...
+                          'chol(S) failed at step %d.',step);
+                end
+                currentInv = @(X) Rcurrent'\(Rcurrent\X);
+            end
+            if refreshSmall
                 smallState = local_build_small_state( ...
-                    S,currentInv,ev,widths.small,settings,step);
+                    Sapply,currentInv,spectrum,nS,widths.small,settings,step);
                 smallRefreshed = true;
                 Astat.small_basis_built_step(end+1) = step;
                 Astat.small_basis_info{end+1} = smallState.info;
@@ -139,8 +179,8 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
             end
 
             [states,Astat] = local_refresh_arm_states( ...
-                states,Astat,S,smallState,smallRefreshed,widths,cutoffs, ...
-                settings,refresh,variants,step);
+                states,Astat,Sapply,nS,smallState,smallRefreshed,widths, ...
+                cutoffs,settings,refresh,variants,step);
             if smallNeeded
                 Astat.lift_tau(step) = smallState.liftTau;
                 Astat.small_basis_dim_history(step) = size(smallState.V,2);
@@ -150,7 +190,7 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
                 variant = variants(variantIndex);
                 [Papply,Vdim,largeDim,tauValues,basisStep,largeStep] = ...
                     local_make_preconditioner( ...
-                    variant.design,S,smallState,states);
+                    variant.design,Sapply,smallState,states);
                 key = variant.name;
                 Astat.deflat_dim.(key) = Vdim;
                 Astat.deflat_dim_history.(key)(step) = Vdim;
@@ -159,14 +199,24 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
                     Astat,key,step,basisStep,largeStep);
                 Astat = local_record_tau( ...
                     Astat,variant.design,step,tauValues);
-                [xs,fl,rr,it] = pcg(S,rhsScaled,settings.solverTol, ...
+                [xs,fl,rr,it] = pcg(Sapply,rhsScaled,settings.solverTol, ...
                     settings.solverMaxit,Papply,[],x0Scaled);
                 Astat = local_record(Astat,key,step,xs,fl,rr,it, ...
                     rhsNorm,y_ref_keep);
             end
+        elseif settings.computeSpectrum
+            widths = struct('small',0,'large',0);
+            [spectrum,~] = local_spectral_summary( ...
+                Sapply,nS,widths,Sdense,settings);
+            Astat.lambda_min(step) = spectrum.lambdaMin;
+            Astat.lambda_max(step) = spectrum.lambdaMax;
+            Astat.kappa(step) = spectrum.lambdaMax/spectrum.lambdaMin;
+            Astat.spectrum_is_exact(step) = spectrum.isExact;
         end
 
-        S_prev = S; A_prev = st.A_bc; D_prev = st.D; C_prev = st.C;
+        SPrevApply = Sapply;
+        if settings.exactDenseDiagnostics, SPrevDense = Sdense; end
+        A_prev = st.A_bc; D_prev = st.D; C_prev = st.C;
         y_prev = y_ref_keep;
         u_prev = x_ref(1:ctx.nU);
 
@@ -189,6 +239,76 @@ function value = local_normalized_change(A,B)
     value = norm(A/max(norm(A,'fro'),eps)-B/max(norm(B,'fro'),eps),'fro');
 end
 
+function value = local_operator_change(Aapply,Bapply,Omega)
+    value = local_normalized_change(Aapply(Omega),Bapply(Omega));
+end
+
+function value = local_pressure_operator_change( ...
+        Aapply,Bapply,Omega,nS,nPressure)
+    sample = zeros(nS,size(Omega,2));
+    sample(1:nPressure,:) = Omega;
+    Apressure = Aapply(sample); Apressure = Apressure(1:nPressure,:);
+    Bpressure = Bapply(sample); Bpressure = Bpressure(1:nPressure,:);
+    value = local_normalized_change(Apressure,Bpressure);
+end
+
+function value = local_symmetry_probe(Aapply,Omega)
+    projected = Omega'*Aapply(Omega);
+    value = norm(projected-projected','fro')/max(norm(projected,'fro'),eps);
+end
+
+function [Sdense,Astat] = local_require_dense(Sdense,st,Astat,step)
+    if ~isempty(Sdense), return; end
+    Sdense = st.to_dense();
+    if isempty(Astat.dense_materialized_step) || ...
+            Astat.dense_materialized_step(end) ~= step
+        Astat.dense_materialized_step(end+1) = step;
+    end
+end
+
+function [spectrum,ev] = local_spectral_summary( ...
+        Sapply,nS,widths,Sdense,settings)
+    ev = [];
+    if ~isempty(Sdense)
+        ev = sort(real(eig(Sdense)),'ascend');
+        spectrum.lambdaMin = ev(1);
+        spectrum.lambdaMax = ev(end);
+        spectrum.isExact = true;
+        if widths.small > 0
+            spectrum.cutoffs = local_target_cutoffs(ev,widths);
+        else
+            spectrum.cutoffs = struct( ...
+                'lambdaLo',NaN,'lambdaHi',NaN,'tauStar',NaN);
+        end
+        return
+    end
+
+    options = struct('issym',true,'isreal',true, ...
+        'tol',settings.spectralTolerance,'maxit',settings.spectralMaxit);
+    smallCount = max(1,widths.small+1);
+    largeCount = max(1,widths.large+1);
+    [~,smallValues] = eigs(Sapply,nS,smallCount,'smallestabs',options);
+    [~,largeValues] = eigs(Sapply,nS,largeCount,'largestreal',options);
+    smallValues = sort(real(diag(smallValues)),'ascend');
+    largeValues = sort(real(diag(largeValues)),'descend');
+    spectrum.lambdaMin = smallValues(1);
+    spectrum.lambdaMax = largeValues(1);
+    spectrum.isExact = false;
+    if spectrum.lambdaMin <= 0
+        error('solve_varvisc_schur_sequence:notSPD', ...
+              'The estimated smallest Schur eigenvalue is nonpositive.');
+    end
+    if widths.small > 0
+        spectrum.cutoffs.lambdaLo = smallValues(end);
+        spectrum.cutoffs.lambdaHi = largeValues(end);
+        spectrum.cutoffs.tauStar = sqrt( ...
+            spectrum.cutoffs.lambdaLo*spectrum.cutoffs.lambdaHi);
+    else
+        spectrum.cutoffs = struct( ...
+            'lambdaLo',NaN,'lambdaHi',NaN,'tauStar',NaN);
+    end
+end
+
 function settings = local_settings(params)
     settings.smEig = local_param(params,'sm_eig',20);
     settings.lgEig = local_param(params,'lg_eig',500);
@@ -206,6 +326,11 @@ function settings = local_settings(params)
     settings.tauOverride = local_param(params,'tau',[]);
     settings.skipUnpreconditioned = local_param(params,'skip_unprecond',false);
     settings.computeSpectrum = local_param(params,'COMPUTE_SPECTRUM',true);
+    settings.exactDenseDiagnostics = local_param( ...
+        params,'EXACT_DENSE_DIAGNOSTICS',false);
+    settings.spectralTolerance = local_param( ...
+        params,'SPECTRAL_RITZ_TOL',1e-10);
+    settings.spectralMaxit = local_param(params,'SPECTRAL_RITZ_MAXIT',1000);
     settings.solverTol = local_param(params,'SOLVER_TOL',1e-8);
     settings.solverMaxit = local_param(params,'SOLVER_MAXIT',1e5);
 
@@ -221,6 +346,12 @@ function settings = local_settings(params)
         {'scalar','integer','nonnegative'},mfilename,'params.lift_large_q');
     validateattributes(settings.oversampling,{'numeric'}, ...
         {'scalar','real','finite','>=',1},mfilename,'params.sketch_oversampling');
+    validateattributes(settings.exactDenseDiagnostics,{'logical','numeric'}, ...
+        {'scalar'},mfilename,'params.EXACT_DENSE_DIAGNOSTICS');
+    validateattributes(settings.spectralTolerance,{'numeric'}, ...
+        {'scalar','real','finite','positive'},mfilename,'params.SPECTRAL_RITZ_TOL');
+    validateattributes(settings.spectralMaxit,{'numeric'}, ...
+        {'scalar','integer','positive'},mfilename,'params.SPECTRAL_RITZ_MAXIT');
     if ~ismember(settings.smallSource,{'lanczos','inverse_gaussian'})
         error('solve_varvisc_schur_sequence:badSmallSource', ...
               ['small_basis_source must be ''lanczos'' or ', ...
@@ -326,11 +457,13 @@ function Astat = local_prealloc(keys,labels,nsteps,settings)
         Astat.solver_relres.(key) = nan(nsteps,1);
         Astat.solver_err.(key) = nan(nsteps,1);
     end
-    fields = {'backslash_relres','vel_recovery_err','symmetry_res','chol_flag', ...
-        'ReldiffF','RelInitdiffF','InvRelDiff','coupling_change','A_change', ...
-        'D_change','pressure_schur_change','nu_contrast','lambda_min', ...
-        'lambda_max','kappa','nC','nS','lambda_lo_target', ...
-        'lambda_hi_target','tau_star_target','lift_tau', ...
+    fields = {'backslash_relres','vel_recovery_err','schur_ref_relres', ...
+        'symmetry_res','symmetry_probe_res','chol_flag','ReldiffF', ...
+        'RelInitdiffF','ReldiffProbe','RelInitdiffProbe','InvRelDiff', ...
+        'coupling_change','A_change','D_change','pressure_schur_change', ...
+        'pressure_schur_change_probe','nu_contrast','lambda_min', ...
+        'lambda_max','kappa','spectrum_is_exact','nC','nS', ...
+        'lambda_lo_target','lambda_hi_target','tau_star_target','lift_tau', ...
         'small_basis_dim_history'};
     for index = 1:numel(fields), Astat.(fields{index}) = nan(nsteps,1); end
     Astat.LowRankInvRelDiff = nan(nsteps,1);
@@ -366,6 +499,8 @@ function Astat = local_prealloc(keys,labels,nsteps,settings)
     Astat.small_basis_ritz_values = {};
     Astat.sketch_oversampling = settings.oversampling;
     Astat.chol_built_step = [];
+    Astat.dense_materialized_step = [];
+    Astat.exact_dense_diagnostics = logical(settings.exactDenseDiagnostics);
 end
 
 function refresh = local_refresh_intervals(params)
@@ -436,31 +571,31 @@ function states = local_empty_arm_states()
 end
 
 function smallState = local_build_small_state( ...
-        S,currentInv,ev,kSmall,settings,step)
-    nS = size(S,1);
+        Sapply,currentInv,spectrum,nS,kSmall,settings,step)
     switch settings.smallSource
         case 'lanczos'
             computedRank = min(kSmall+1,nS);
             options = struct('maxSteps',nS, ...
                 'checkEvery',settings.lanczosCheckEvery, ...
                 'tolerance',settings.lanczosTolerance, ...
-                'operatorNorm',ev(end));
+                'operatorNorm',spectrum.lambdaMax, ...
+                'dimension',nS);
             [Vall,thetaAll,info] = ...
                 fully_reorthogonalized_lanczos_smallest( ...
-                S,computedRank,options);
+                Sapply,computedRank,options);
             V = Vall(:,1:kSmall);
             theta = thetaAll(1:kSmall);
             info.computedRank = computedRank;
         case 'inverse_gaussian'
             [V,theta,info] = gaussian_rayleigh_ritz_basis( ...
-                currentInv,@(X) S*X,nS,kSmall,settings.smallQ, ...
+                currentInv,Sapply,nS,kSmall,settings.smallQ, ...
                 settings.oversampling,'smallest');
     end
 
-    E = V'*(S*V);
+    E = V'*Sapply(V);
     E = (E+E')/2;
     lambdaHat = min(real(eig(E)));
-    denominator = ev(end)-lambdaHat;
+    denominator = spectrum.lambdaMax-lambdaHat;
     if ~(lambdaHat > 0 && denominator > 0)
         error('solve_varvisc_schur_sequence:badLiftTau', ...
               'Cannot form a positive dynamic lift tau at step %d.',step);
@@ -469,11 +604,11 @@ function smallState = local_build_small_state( ...
     if ~isempty(settings.liftTauOverride)
         liftTau = settings.liftTauOverride;
     end
-    directTau = ev(end);
+    directTau = spectrum.lambdaMax;
     if ~isempty(settings.tauOverride), directTau = settings.tauOverride; end
     info.lambdaHat = lambdaHat;
     info.liftedLambdaHat = (1+1/liftTau)*lambdaHat;
-    info.lambdaMax = ev(end);
+    info.lambdaMax = spectrum.lambdaMax;
     info.dynamicLiftTau = lambdaHat/denominator;
     info.usedFixedLiftTau = ~isempty(settings.liftTauOverride);
     smallState = struct('V',V,'theta',theta,'liftTau',liftTau, ...
@@ -481,15 +616,13 @@ function smallState = local_build_small_state( ...
 end
 
 function [states,Astat] = local_refresh_arm_states( ...
-        states,Astat,S,smallState,smallRefreshed,widths,cutoffs, ...
+        states,Astat,Sapply,nS,smallState,smallRefreshed,widths,cutoffs, ...
         settings,refresh,variants,step)
-    nS = size(S,1);
-
     if local_design_enabled(variants,'gaussian_large') && ...
             (isempty(states.gaussian_large.V) || ...
              local_refresh_due(step,refresh.gaussianLarge))
         [V,~,~] = gaussian_rayleigh_ritz_basis( ...
-            @(X) S*X,@(X) S*X,nS,widths.large,settings.largeQ, ...
+            Sapply,Sapply,nS,widths.large,settings.largeQ, ...
             settings.oversampling,'largest');
         states.gaussian_large.V = V;
         states.gaussian_large.tau1 = cutoffs.lambdaHi;
@@ -502,7 +635,7 @@ function [states,Astat] = local_refresh_arm_states( ...
             local_refresh_due(step,refresh.sequential);
         if largeRefreshed
             [Vlarge,~,~] = gaussian_rayleigh_ritz_basis( ...
-                @(X) S*X,@(X) S*X,nS,widths.large,settings.largeQ, ...
+                Sapply,Sapply,nS,widths.large,settings.largeQ, ...
                 settings.oversampling,'largest');
             states.sequential_shared_subspace.largeV = Vlarge;
             states.sequential_shared_subspace.largeBuildStep = step;
@@ -522,7 +655,7 @@ function [states,Astat] = local_refresh_arm_states( ...
             local_refresh_due(step,refresh.concatenated);
         if largeRefreshed
             [Vlarge,~,~] = gaussian_rayleigh_ritz_basis( ...
-                @(X) S*X,@(X) S*X,nS,widths.large,settings.largeQ, ...
+                Sapply,Sapply,nS,widths.large,settings.largeQ, ...
                 settings.oversampling,'largest');
             states.concatenated_once.largeV = Vlarge;
             states.concatenated_once.largeBuildStep = step;
@@ -541,7 +674,7 @@ function [states,Astat] = local_refresh_arm_states( ...
         if rebuild
             [~,liftHalf] = small_eigenvalue_lift( ...
                 smallState.V,smallState.liftTau);
-            transformedApply = @(X) liftHalf(S*liftHalf(X));
+            transformedApply = @(X) liftHalf(Sapply(liftHalf(X)));
             [Vlarge,~,~] = gaussian_rayleigh_ritz_basis( ...
                 transformedApply,transformedApply,nS,widths.large, ...
                 settings.liftLargeQ,settings.oversampling,'largest');
@@ -573,7 +706,7 @@ function V = local_combine_bases(Vlarge,Vsmall)
 end
 
 function [Papply,Vdim,largeDim,tauValues,basisStep,largeStep] = ...
-        local_make_preconditioner(design,S,smallState,states)
+        local_make_preconditioner(design,Sapply,smallState,states)
     tauValues = struct('first',NaN,'second',NaN);
     largeDim = 0;
     switch design
@@ -581,7 +714,7 @@ function [Papply,Vdim,largeDim,tauValues,basisStep,largeStep] = ...
             V = smallState.V;
             tauValues.first = smallState.directTau;
             Papply = src.precond.deflation_P_apply( ...
-                V,S,tauValues.first,'handle',0);
+                V,Sapply,tauValues.first,'handle',0);
             Vdim = size(V,2);
             basisStep = smallState.basisBuildStep;
             largeStep = NaN;
@@ -589,7 +722,7 @@ function [Papply,Vdim,largeDim,tauValues,basisStep,largeStep] = ...
             state = states.gaussian_large;
             tauValues.first = state.tau1;
             Papply = src.precond.deflation_P_apply( ...
-                state.V,S,tauValues.first,'handle',0);
+                state.V,Sapply,tauValues.first,'handle',0);
             Vdim = size(state.V,2); largeDim = Vdim;
             basisStep = state.basisBuildStep;
             largeStep = state.largeBuildStep;
@@ -598,8 +731,8 @@ function [Papply,Vdim,largeDim,tauValues,basisStep,largeStep] = ...
             tauValues.first = state.tau1;
             tauValues.second = state.tau2;
             P1half = src.precond.deflation_Psqrt_apply( ...
-                state.V,S,tauValues.first,'handle');
-            S1apply = @(X) P1half(S*P1half(X));
+                state.V,Sapply,tauValues.first,'handle');
+            S1apply = @(X) P1half(Sapply(P1half(X)));
             P2apply = src.precond.deflation_P_apply( ...
                 state.V,S1apply,tauValues.second,'handle',0);
             Papply = @(X) P1half(P2apply(P1half(X)));
@@ -611,7 +744,7 @@ function [Papply,Vdim,largeDim,tauValues,basisStep,largeStep] = ...
             state = states.concatenated_once;
             tauValues.first = state.tau1;
             Papply = src.precond.deflation_P_apply( ...
-                state.V,S,tauValues.first,'handle',0);
+                state.V,Sapply,tauValues.first,'handle',0);
             Vdim = size(state.V,2);
             largeDim = size(state.largeV,2);
             basisStep = state.basisBuildStep;
@@ -622,7 +755,7 @@ function [Papply,Vdim,largeDim,tauValues,basisStep,largeStep] = ...
             tauValues.second = state.tau1;
             [~,liftHalf] = small_eigenvalue_lift( ...
                 smallState.V,tauValues.first);
-            transformedApply = @(X) liftHalf(S*liftHalf(X));
+            transformedApply = @(X) liftHalf(Sapply(liftHalf(X)));
             P2apply = src.precond.deflation_P_apply( ...
                 state.V,transformedApply,tauValues.second,'handle',0);
             Papply = @(X) liftHalf(P2apply(liftHalf(X)));

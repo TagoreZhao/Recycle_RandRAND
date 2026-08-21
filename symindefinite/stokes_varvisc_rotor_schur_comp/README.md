@@ -3,14 +3,14 @@
 This benchmark is the reduced-system counterpart of
 [`../stokes_varvisc_rotor/`](../stokes_varvisc_rotor/). The parent problem
 produces a sequence of sparse, symmetric indefinite Stokes KKT systems. This
-benchmark eliminates velocity and instead solves the explicit dense Schur
-complement in the pressure and immersed-multiplier variables.
+benchmark eliminates velocity and applies the Schur complement in the pressure
+and immersed-multiplier variables through a function handle.
 
 The distinction matters because the reduced operator has different algebraic
 properties from the KKT matrix: after removal of the pressure-pin direction it
-is symmetric positive definite (SPD), but it is dense. Variable viscosity also
-changes the velocity inverse inside the Schur complement, so the entire reduced
-operator must be reconstructed at every time step. The border-only shortcut
+is symmetric positive definite (SPD), but its matrix representation is dense.
+Variable viscosity also changes the velocity inverse inside the Schur
+complement, so its current apply must be reconstructed at every time step. The border-only shortcut
 available to the constant-viscosity immersed-rotor problem does not apply.
 
 ## 1. The variable-viscosity KKT system
@@ -146,17 +146,17 @@ u=A_n^{-1}(b_1-G_n^\mathsf{T}y).
 `varvisc_schur_step_operator` implements the formulas directly:
 
 ```matlab
-dA      = decomposition(A, 'chol');
-Y       = dA \ full(Gt);               % Y = A_n^{-1} G_n^T
-Sfull   = full(D) + Gt' * Y;
-rhsFull = Gt' * (dA \ b1) - b2;
-Sfull   = (Sfull + Sfull') / 2;
+dA = decomposition(A, 'chol');
+Sapply = @(X) Dred*X + Gtred'*(dA\(Gtred*X));
+rhs_S = Gtred'*(dA\b1) - b2red;
 ```
 
-Thus construction of the complete Schur matrix requires one current Cholesky
-factorization of $A_n$ and a block solve with all $n_P+n_C$ columns of
-$G_n^\mathsf{T}$. The final averaging removes roundoff-level asymmetry; it does
-not change the mathematical operator.
+`st.apply(X)` supports both vectors and block matrices, so PCG, Gaussian
+sketches, Lanczos, and coarse Galerkin products all use the same matrix-free
+operator. `st.to_dense()` is the explicit escape hatch for exact Cholesky,
+exact spectra, rank diagnostics, and exported dense examples. Materialization
+performs the block solve with every retained column of $G_n^\mathsf{T}$ and
+averages the result with its transpose to remove roundoff-level asymmetry.
 
 The returned reduced dimension is
 
@@ -205,9 +205,10 @@ violate PCG's assumptions.
 
 The assembled KKT blocks are sparse, but $A_n^{-1}$ is generally dense. The
 product $G_nA_n^{-1}G_n^\mathsf{T}$ therefore couples nearly every retained
-pressure and multiplier coordinate, and `S_n` is formed as a full MATLAB
-matrix. An incomplete sparse factorization is not a natural preconditioner for
-this explicit operator; the exact-factor baseline is dense Cholesky.
+pressure and multiplier coordinate. The mathematical matrix is dense even
+though ordinary applications do not form it. An incomplete sparse
+factorization is not a natural preconditioner for this operator; the
+exact-factor baseline explicitly materializes $S_1$ and uses dense Cholesky.
 
 ### Exact reduction of the KKT system
 
@@ -271,8 +272,8 @@ dimension can change.
 - **Right-hand side.** It carries $u^{n-1}$ forward and includes the current
   rigid velocity, optional force, and prescribed boundary data.
 - **Complete Schur operator.** The pressure-pressure, pressure-multiplier, and
-  multiplier-multiplier blocks can all change. The full dense $S_n$ and reduced
-  right-hand side are rebuilt.
+  multiplier-multiplier blocks can all change. The function-handle closure and
+  reduced right-hand side are rebuilt without forming the full dense matrix.
 
 ### Contrast with the constant-viscosity Schur benchmark
 
@@ -328,7 +329,7 @@ have the same requested large dimension. Their random draws remain independent.
 The central small source is selected by `small_basis_source`:
 
 - `lanczos` (default) runs fully reorthogonalized Lanczos directly on the
-  current dense Schur matrix. It computes `sm_eig+1` Ritz pairs and retains the
+  current Schur apply. It computes `sm_eig+1` Ritz pairs and retains the
   first `sm_eig`; no Cholesky factorization of the Schur matrix is used by the
   Lanczos iteration itself.
 - `inverse_gaussian` applies the exact current Cholesky inverse to a Gaussian
@@ -350,8 +351,8 @@ uses `lift_large_q`.
 
 The reusable objects have distinct refresh rules:
 
-1. The Cholesky of $A_n$ used to **construct** the exact current $S_n$ is
-   rebuilt every step because viscosity changes $A_n$.
+1. The Cholesky of $A_n$ used by the current Schur apply is rebuilt every step
+   because viscosity changes $A_n$.
 2. The `chol` solver arm deliberately freezes the dense Cholesky of $S_1$ and
    reuses it as a preconditioner for later $S_n$. This is the factor that
    becomes stale in moving-viscosity cases.
@@ -412,8 +413,17 @@ small tau and therefore a very large lift coefficient
 `1/lift_tau=1e10`; the selected value is cached with the shared small basis.
 
 The basis lives in the physical coordinates of $S_n$. There is no inner split
-No `ichol` or sparse-proxy arm is included because the exact Schur complement
-being studied is dense.
+No `ichol` or sparse-proxy arm is included because the Schur complement's
+matrix representation is dense.
+
+The main benchmark defaults to `EXACT_DENSE_DIAGNOSTICS=false`. Its Schur
+drift plots use fixed Gaussian probe actions, and spectral targets use
+matrix-free extremal Ritz estimates. Setting the flag to `true` restores exact
+Frobenius drift, exact inverse drift, full eigenvalues, and a current Cholesky
+check by explicitly materializing every required $S_n$. The dedicated spectrum,
+rank, and extraction scripts always request dense matrices because exact dense
+quantities are their purpose. `Astat.dense_materialized_step` records every
+time step at which the main sequence requested a dense matrix.
 
 ## 6. Benchmark cases
 
@@ -487,7 +497,8 @@ conditioning plots.
 The test suite checks the defining Schur properties:
 
 - `test_varvisc_schur_correctness` compares Schur recovery with full `K\b`,
-  checks symmetry and Cholesky success, and verifies velocity boundary values;
+  compares vector and block operator products with the explicit matrix, checks
+  symmetry and Cholesky success, and verifies velocity boundary values;
 - `test_varvisc_schur_pin` verifies the decoupled `-1` pressure-pin direction
   and its deletion;
 - `test_varvisc_schur_structure` verifies motion of $A_n$, $D_n$, and the
@@ -507,8 +518,8 @@ The construction is split between three benchmark-local helpers:
   symmetric velocity and pressure boundary elimination;
 - `varvisc_schur_context_init.m` stores only time-independent mesh and assembly
   data; and
-- `varvisc_schur_step_operator.m` slices the KKT blocks, constructs the complete
-  dense Schur matrix, removes the pin, and defines full-solution recovery.
+- `varvisc_schur_step_operator.m` slices the KKT blocks, removes the pin,
+  exposes `apply` and `to_dense` handles, and defines full-solution recovery.
 
 All benchmark-local helpers use the `varvisc_schur` prefix to avoid name
 collisions with the KKT and constant-viscosity Schur benchmarks.

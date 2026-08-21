@@ -8,16 +8,17 @@ Sprev = []; rows = {};
 out_dir = fullfile(paths.outDir,'rank'); if ~exist(out_dir,'dir'), mkdir(out_dir); end
 for n = 1:nsteps
     st = varvisc_schur_step_operator(ctx,n*params.dt,u);
+    S = st.to_dense();
     if ~isempty(Sprev)
-        dS = st.S-Sprev; dSpp = dS(1:ctx.nP-1,1:ctx.nP-1);
-        tol = 1e-10*norm(st.S,'fro');
+        dS = S-Sprev; dSpp = dS(1:ctx.nP-1,1:ctx.nP-1);
+        tol = 1e-10*norm(S,'fro');
         rows{end+1} = struct('step',n,'nS',st.nS,'nC',st.nC, ... %#ok<AGROW>
             'rank_dS',rank(dS,tol),'old_border_bound',2*st.nC, ...
             'rank_dSpp',rank(dSpp,tol), ...
-            'relative_change',norm(dS,'fro')/norm(st.S,'fro'), ...
+            'relative_change',norm(dS,'fro')/norm(S,'fro'), ...
             'pressure_block_energy',norm(dSpp,'fro')/norm(dS,'fro'));
     end
-    Sprev = st.S; xr = st.K\st.b; u = xr(1:ctx.nU);
+    Sprev = S; xr = st.K\st.b; u = xr(1:ctx.nU);
 end
 T = struct2table([rows{:}]);
 assert(any(T.rank_dS>T.old_border_bound), ...

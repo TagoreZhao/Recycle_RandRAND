@@ -28,15 +28,17 @@ assert(isequal(s1.C,se.C),'The hard case changed C; drift is not viscosity-only.
 
 for st = {s1,se}
     op = st{1};
-    assert(norm(op.S-op.S','fro')<1e-13*norm(op.S,'fro'),'S is nonsymmetric.');
-    [~,flag] = chol(op.S); assert(flag==0,'S is not SPD.');
+    S = op.to_dense();
+    assert(norm(S-S','fro')<1e-13*norm(S,'fro'),'S is nonsymmetric.');
+    [~,flag] = chol(S); assert(flag==0,'S is not SPD.');
     xr = op.K\op.b;
-    xs = op.recover(op.S\op.rhs_S);
+    xs = op.recover(S\op.rhs_S);
     assert(norm(xs-xr)/max(norm(xr),eps)<1e-10,'Schur recovery differs from K\b.');
 end
 
-R1 = chol(s1.S,'lower');
-H = (R1\se.S)/R1'; H = (H+H')/2;
+S1 = s1.to_dense(); Se = se.to_dense();
+R1 = chol(S1,'lower');
+H = (R1\Se)/R1'; H = (H+H')/2;
 ev = sort(real(eig(H)),'ascend'); nev = numel(ev);
 q01 = ev(max(1,ceil(0.01*nev)));
 q99 = ev(min(nev,floor(0.99*nev)));

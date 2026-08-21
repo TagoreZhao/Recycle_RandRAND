@@ -29,6 +29,9 @@ function params = make_varvisc_schur_params()
     params.DEFLAT_ADAPTIVE_LIFT_LARGE_REFRESH = Inf;
     params.skip_unprecond = false;
     params.COMPUTE_SPECTRUM = true;
+    params.EXACT_DENSE_DIAGNOSTICS = false;
+    params.SPECTRAL_RITZ_TOL = 1e-10;
+    params.SPECTRAL_RITZ_MAXIT = 1000;
     params.standalone_variants = [ ...
         struct('name','deflate_shared_small', ...
                'design','shared_small'), ...

@@ -6,15 +6,15 @@ p = make_varvisc_schur_params(); p.h0 = 0.1; k = 4;
 cfg = varvisc_schur_make_cfg('bar_rotating_nu_orbiting',p,[]);
 ctx = varvisc_schur_context_init(cfg,p);
 st = varvisc_schur_step_operator(ctx,p.dt,zeros(ctx.nU,1));
-S = st.S; n = size(S,1);
+Sapply = st.apply; S = st.to_dense(); n = size(S,1);
 [U,D] = eig(S,'vector'); [lam,ord] = sort(real(D)); U = real(U(:,ord));
 VexactSmall = U(:,1:k);
 R = chol(S,'lower'); Sinv = @(X) R'\(R\X);
 
 [Vsmall,thetaSmall,smallInfo] = gaussian_rayleigh_ritz_basis( ...
-    Sinv,@(X) S*X,n,k,2,2,'smallest');
+    Sinv,Sapply,n,k,2,2,'smallest');
 [Vlarge,thetaLarge,largeInfo] = gaussian_rayleigh_ritz_basis( ...
-    @(X) S*X,@(X) S*X,n,k,2,2,'largest');
+    Sapply,Sapply,n,k,2,2,'largest');
 assert(size(Vsmall,2) == k && size(Vlarge,2) == k, ...
        'Rayleigh--Ritz did not compress both sketches to target rank.');
 assert(smallInfo.sketchWidth == 2*k && largeInfo.sketchWidth == 2*k, ...
@@ -27,9 +27,9 @@ assert(issorted(thetaSmall,'ascend') && issorted(thetaLarge,'descend'), ...
        'Ritz values are not ordered by the requested tail.');
 
 options = struct('maxSteps',n,'checkEvery',5, ...
-    'tolerance',1e-11,'operatorNorm',lam(end));
+    'tolerance',1e-11,'operatorNorm',lam(end),'dimension',n);
 [Vlanczos,thetaLanczos,lanczosInfo] = ...
-    fully_reorthogonalized_lanczos_smallest(S,k+1,options);
+    fully_reorthogonalized_lanczos_smallest(Sapply,k+1,options);
 assert(size(Vlanczos,2) == k+1, ...
        'Lanczos did not compute the requested extra Ritz pair.');
 assert(lanczosInfo.orthogonalityResidual < 1e-10, ...
@@ -56,8 +56,8 @@ assert(norm(Plift(X)-PliftHalf(PliftHalf(X)),'fro') < ...
 V = orth([Vlarge,Vsmall]);
 lambdaLower = lam(k+1); lambdaUpper = lam(n-k);
 tauStar = sqrt(lambdaLower*lambdaUpper);
-[P1half,E1] = deflation_Psqrt_apply(V,S,lambdaUpper,'handle');
-S1apply = @(X) P1half(S*P1half(X));
+[P1half,E1] = deflation_Psqrt_apply(V,Sapply,lambdaUpper,'handle');
+S1apply = @(X) P1half(Sapply(P1half(X)));
 [P2apply,E2] = deflation_P_apply(V,S1apply,tauStar,'handle',0);
 Ptwo = @(X) P1half(P2apply(P1half(X)));
 [~,f1] = chol((E1+E1')/2); [~,f2] = chol((E2+E2')/2);

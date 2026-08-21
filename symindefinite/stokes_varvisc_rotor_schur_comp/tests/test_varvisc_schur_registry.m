@@ -39,6 +39,8 @@ for keyIndex = 1:numel(expected)
 end
 
 assert(isequal(A.chol_built_step,1),'Frozen Cholesky was not built once.');
+assert(isequal(A.dense_materialized_step,1), ...
+       'Operator-first benchmark materialized S after the frozen factor build.');
 assert(isequal(A.small_basis_built_step,[1 3]), ...
        'The central small basis did not honor its refresh interval.');
 assert(isequal(A.basis_built_step.deflate_shared_small,[1 3]), ...
@@ -90,8 +92,10 @@ assert(abs(A.deflation_tau.adaptive_large(3)-A.tau_star_target(3)) < ...
        1e-12*scale,'Post-lift large tau is incorrect.');
 for refreshIndex = 1:numel(A.small_basis_info)
     info = A.small_basis_info{refreshIndex};
-    assert(abs(info.liftedLambdaHat-info.lambdaMax) < 1e-10*info.lambdaMax, ...
-           'Dynamic lift tau does not map lambdaHat to lambdaMax.');
+    if ~info.usedFixedLiftTau
+        assert(abs(info.liftedLambdaHat-info.lambdaMax) < 1e-10*info.lambdaMax, ...
+               'Dynamic lift tau does not map lambdaHat to lambdaMax.');
+    end
 end
 
 pinverse = p;

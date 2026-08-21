@@ -4,6 +4,7 @@ thisDir = fileparts(mfilename('fullpath')); addpath(fileparts(thisDir));
 add_varvisc_schur_paths(); rng(1);
 p=make_varvisc_schur_params(); p.h0=.1; p.max_steps=4;
 p.standalone_variants=[]; p.COMPUTE_SPECTRUM=false;
+p.EXACT_DENSE_DIAGNOSTICS=true;
 cfg=varvisc_schur_make_cfg('bar_rotating_nu_orbiting',p,[]);
 A=solve_varvisc_schur_sequence(cfg,p,'');
 assert(A.solver_its.chol(1)<=2,'Frozen chol is not exact at step 1.');

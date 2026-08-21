@@ -17,7 +17,7 @@ for hi = 1:numel(h0_list)
     cfg = varvisc_schur_make_cfg('bar_rotating_nu_orbiting',p,[]);
     ctx = varvisc_schur_context_init(cfg,p); u = zeros(ctx.nU,1); R1 = [];
     for n = 1:max(snapshot_steps)
-        st = varvisc_schur_step_operator(ctx,n*p.dt,u); S = st.S;
+        st = varvisc_schur_step_operator(ctx,n*p.dt,u); S = st.to_dense();
         if isempty(R1), R1 = chol(S,'lower'); end
         if ismember(n,snapshot_steps)
             ev = sort(real(eig(S)),'ascend');

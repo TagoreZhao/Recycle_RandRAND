@@ -86,7 +86,7 @@ end
 %=========================================================================
 % Validate the extracted system and compute its complete spectrum
 %=========================================================================
-S = st.S;
+S = st.to_dense();
 rhs_S = st.rhs_S;
 keep = st.keep;
 sym_res = norm(S - S', 'fro') / max(norm(S, 'fro'), eps);
