@@ -18,6 +18,8 @@ p.standalone_variants = struct( ...
 
 cfg = varvisc_schur_make_cfg('disk_static_nu_const',p,[]);
 A = solve_varvisc_schur_sequence(cfg,p,'');
+assert(isequal(A.dense_materialized_step,1), ...
+       'Extreme plots materialized a dense operator after the frozen factor.');
 for keyIndex = 1:numel(A.solver_keys)
     key = A.solver_keys{keyIndex};
     lambdaMin = A.system_lambda_min.(key);
@@ -30,6 +32,10 @@ for keyIndex = 1:numel(A.solver_keys)
            'Preconditioned condition numbers are inconsistent for %s.',key);
     assert(all(A.system_spectrum_flag.(key) == 0), ...
            'The iterative eigensolver did not converge for %s.',key);
+    if ~strcmp(key,'pcg_unprec')
+        assert(~any(A.system_spectrum_is_exact.(key)), ...
+               'A preconditioned system unexpectedly used a dense eigensolve.');
+    end
     if ~strcmp(key,'pcg_unprec')
         assert(all(isfinite(A.system_spectrum_residual.(key))), ...
                'Missing Ritz residuals for %s.',key);

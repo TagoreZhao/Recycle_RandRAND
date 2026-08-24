@@ -451,12 +451,14 @@ come from each symmetric two-sided preconditioned operator, so they represent
 the spectrum relevant to PCG rather than the generally nonsymmetric product
 `P*S`. The option is disabled by default because its cost scales with the
 number of solver arms. It reuses `SPECTRAL_RITZ_TOL` and
-`SPECTRAL_RITZ_MAXIT`. The smallest-magnitude estimate is computed from the
-largest-magnitude Ritz value of the inverse operator and then reciprocated.
-Both extreme eigenpairs receive a residual check; a failed iterative estimate
-falls back to a dense symmetric eigensolve. The statistics include the two
-extremes, their ratio, the maximum Ritz residual, and whether dense fallback
-was used.
+`SPECTRAL_RITZ_MAXIT`. Because every measured operator is SPD, its
+smallest-magnitude eigenvalue is recovered from the largest-real Ritz value of
+the shifted operator `lambda_max*I-A`. This remains fully matrix-free, makes
+the desired mode dominant, and avoids an inner shift-invert solve. Both
+extreme eigenpairs receive an operator-norm-relative residual check;
+a failed optional estimate is recorded without materializing a dense operator
+or aborting the benchmark. The statistics include the two extremes, their
+ratio, the maximum Ritz residual, and whether the value was exact.
 
 ## 6. Benchmark cases
 
