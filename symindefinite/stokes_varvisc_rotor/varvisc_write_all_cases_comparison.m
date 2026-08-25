@@ -1,8 +1,10 @@
-function varvisc_write_all_cases_comparison(out_dir, all_stats, opts)
+function varvisc_write_all_cases_comparison(out_dir, all_stats, opts, output_name)
 %WRITE_ALL_CASES_COMPARISON  One panel per motion case, all solvers overlaid.
 %
 %   WRITE_ALL_CASES_COMPARISON(OUT_DIR, ALL_STATS, OPTS)
-%   Writes <OUT_DIR>/all_cases_comparison.png.
+%   WRITE_ALL_CASES_COMPARISON(OUT_DIR, ALL_STATS, OPTS, OUTPUT_NAME)
+%   OUTPUT_NAME defaults to all_cases_comparison.png; OPTS.yscale selects
+%   the logarithmic default or a linear y axis.
 %
 %   This is the figure the old code broke worst: subplot(1,nc,k) plus a
 %   per-panel legend meant three full-width legends inside three 420 px panels,
@@ -16,11 +18,12 @@ function varvisc_write_all_cases_comparison(out_dir, all_stats, opts)
 %   See also: varvisc_plot_solver_curves, varvisc_place_solver_legend.
 
     if nargin < 3 || isempty(opts), opts = varvisc_fig_defaults(); end
+    if nargin < 4 || isempty(output_name), output_name = 'all_cases_comparison.png'; end
     if ~exist(out_dir, 'dir'), mkdir(out_dir); end
 
     nc    = numel(all_stats);
     width = min(opts.panel_width * nc + opts.panel_margin, opts.max_width);
-    gylim = shared_ylim(all_stats);
+    gylim = shared_ylim(all_stats, opts);
 
     fh = figure('Visible', 'off', 'Color', 'w', 'Units', 'inches', ...
                 'Position', [1 1 width opts.multi_height]);
@@ -62,17 +65,18 @@ function varvisc_write_all_cases_comparison(out_dir, all_stats, opts)
     if isfield(all_stats{1}, 'geometry') && ~isempty(all_stats{1}.geometry)
         geom = all_stats{1}.geometry;
     end
-    title(tl, sprintf('Krylov iterations vs time step (%s)', geom), ...
+    scale_note = '';
+    if strcmpi(opts.yscale, 'linear'), scale_note = ', linear scale'; end
+    title(tl, sprintf('Krylov iterations vs time step (%s%s)', geom, scale_note), ...
           'Interpreter', 'none', 'FontWeight', 'bold', ...
           'FontSize', opts.titlefontsize);
 
-    save_varvisc_figure(fh, fullfile(out_dir, 'all_cases_comparison.png'), opts);
+    save_varvisc_figure(fh, fullfile(out_dir, output_name), opts);
 end
 
 %==========================================================================
-function lims = shared_ylim(all_stats)
-%SHARED_YLIM  Common log-scale limits over every case and solver, padded a
-% decade-fraction so markers are not clipped at the frame.
+function lims = shared_ylim(all_stats, opts)
+%SHARED_YLIM Common limits over every case and solver for the selected scale.
     lo = inf; hi = -inf;
     for k = 1:numel(all_stats)
         st = all_stats{k};
@@ -86,5 +90,9 @@ function lims = shared_ylim(all_stats)
         lims = [1 10];
         return
     end
-    lims = [lo * 0.85, hi * 1.20];
+    if strcmpi(opts.yscale, 'linear')
+        lims = [0, hi * 1.05];
+    else
+        lims = [lo * 0.85, hi * 1.20];
+    end
 end

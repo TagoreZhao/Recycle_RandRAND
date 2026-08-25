@@ -435,6 +435,11 @@ returns an empty coarse basis and reduces to plain ILDL.
 
 ## 8. Running the benchmark
 
+The promoted channel/circular-mixer geometry comparison is maintained as the
+[`stokes_varvisc_rotor_upgraded`](../stokes_varvisc_rotor_upgraded/README.md)
+sibling benchmark. It reuses this benchmark's complete solver registry and
+plot/table contract while keeping the original three cases unchanged.
+
 Start MATLAB in `symindefinite/stokes_varvisc_rotor` (or change to that folder)
 and run:
 

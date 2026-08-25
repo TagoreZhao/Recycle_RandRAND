@@ -43,6 +43,8 @@ function Astat = solve_stokes_varvisc(cfg, params, save_dir)
 %   Optional cfg fields:
 %     cfg.bp_mode     - 'elementwise' (default) | 'scalar'
 %                       (scalar fallback: eps = h0^2/(12*min(nu_e)))
+%     cfg.coupling_fun - @(msh,N,X,V) -> [C,g,nC] custom immersed-coupling
+%                        assembler (default: pointwise assemble_coupling)
 %     cfg.fnod_fun    - @(t) -> 2N x 1 nodal body force (default 0)
 %     cfg.pin_node    - pressure node pinned (default: node of maximum x)
 %     cfg.pin_val     - pinned pressure value (default 0)
@@ -181,7 +183,16 @@ function Astat = solve_stokes_varvisc(cfg, params, save_dir)
 
         % --- Moving coupling C(t_n), g(t_n) ---
         mot = cfg.motion_fun(tcur);
-        [C, gvec, nC] = assemble_coupling(TR, N, mot.X, mot.V);
+        if isfield(cfg, 'coupling_fun') && ~isempty(cfg.coupling_fun)
+            [C, gvec, nC] = cfg.coupling_fun(msh, N, mot.X, mot.V);
+        else
+            [C, gvec, nC] = assemble_coupling(TR, N, mot.X, mot.V);
+        end
+        if size(C, 2) ~= nU || size(C, 1) ~= nC || numel(gvec) ~= nC
+            error('solve_stokes_varvisc:badCoupling', ...
+                'Coupling assembler must return C(nC,%d), g(nC,1), and matching nC.', nU);
+        end
+        gvec = gvec(:);
 
         % --- Assemble symmetric indefinite KKT ---
         K = [ Avel ,  Bdiv'  ,  C'       ; ...

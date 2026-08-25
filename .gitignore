@@ -56,3 +56,5 @@ symindefinite/stokes_varvisc_rotor_schur_comp/*.mat
 symindefinite/stokes_varvisc_rotor/convergence_out/
 symindefinite/stokes_varvisc_rotor/output/
 symindefinite/stokes_varvisc_rotor/*.mat
+symindefinite/stokes_varvisc_rotor_upgraded/benchmark_varvisc_upgraded/
+symindefinite/stokes_varvisc_rotor_upgraded/benchmark_varvisc_upgraded_smoke/

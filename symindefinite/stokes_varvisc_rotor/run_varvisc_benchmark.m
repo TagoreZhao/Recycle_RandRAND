@@ -51,43 +51,7 @@ import src.discretization.*
 import src.stokes.*
 rng(1);
 
-params.dt           = 0.02;
-params.Tstep        = 61;       % 61 time levels -> 60 solves, Tmax = 1.2
-params.SOLVER_TOL   = 1e-8;
-params.SOLVER_MAXIT = 4000;
-params.h0           = 0.05;
-
-% Per-preconditioner refresh cadences (rebuild every N steps; Inf = build once).
-params.BLOCKJAC_PREC_REFRESH = 1;     % block-Jacobi ichol (fluid block moves every step;
-                                      % the frozen contrast arm has its own Inf)
-params.ILDL_PREC_REFRESH     = 1;     % incomplete-LDL factor C
-params.DEFLAT_PREC_REFRESH   = Inf;   % deflation subspace V (transported step-1 space).
-                                      % If ever set finite, set DINVERSE_PREC_REFRESH to
-                                      % match — otherwise the inverse-power sketch mixes
-                                      % a stale decomposition(K_1) with the current C.
-params.DINVERSE_PREC_REFRESH = Inf;   % exact A^{-1} factor (sketched V methods)
-params.EXACT_PREC_REFRESH    = Inf;   % EXACT LDL factor of the step-1 KKT (frozen)
-params.ESKETCH_REF_REFRESH   = Inf;   % frozen exact split factor C_1 of the E-sketch reference
-
-% Two-level / deflation method parameters (consumed by varvisc_define_solver_list).
-% ONE sketch configuration for every randomized method: width
-% SKETCH_OVERSAMPLE * DEFLAT_SM_EIG, DEFLAT_Q power rounds, orthonormalize-only
-% (no truncation).  'exact'/'polynomial' V are deterministic and keep dimension
-% DEFLAT_SM_EIG.
-params.DEFLAT_SM_EIG       = 500;       % # smallest-|lambda| deflation vectors (report sm_eig)
-params.DEFLAT_LG_EIG       = 0;         % # largest-|lambda| deflation vectors (0 = off)
-params.DEFLAT_Q            = 2;         % power-iteration rounds, ALL randomized sketches
-params.SKETCH_OVERSAMPLE   = 2;         % GLOBAL sketch-width factor -> 2*500 = 1000 columns
-params.DEFLAT_TAU          = 0.5;       % deflation coarse-correction weight tau
-params.DEFLAT_CHEB_DEGREE  = 4;         % Chebyshev degree (polynomial V; exact eigs band)
-params.ILDL_MODE           = 'nofill';  % incomplete-LDL pattern: 'nofill' | 'droptol'
-params.ILDL_DROPTOL        = 1e-3;      % drop tolerance when ILDL_MODE = 'droptol'
-
-params.GMRES_MAXIT         = 300;       % cap for gmres_exact_inv_frozen (full/unrestarted).
-                                        % No finite-termination bound exists here (the
-                                        % update is full-rank), so hitting the cap on the
-                                        % moving-nu cases is a finding, not a bug.
-
+params = varvisc_default_benchmark_params();
 params.solvers     = varvisc_define_solver_list(params);   % solver/preconditioner registry
 
 geometry = 'stokes_varvisc_rotor';

@@ -32,6 +32,7 @@ function opts = varvisc_fig_defaults(overrides)
         'max_width',       14,  ...
         'legend_columns',   3,  ...   % 8 solvers -> 3 rows, no overlap
         'marker_targets',   8,  ...   % markers drawn per curve (staggered)
+        'yscale',       'log',  ...   % 'log' (default) or 'linear'
         'close',        true);
 
     if nargin >= 1 && ~isempty(overrides) && isstruct(overrides)

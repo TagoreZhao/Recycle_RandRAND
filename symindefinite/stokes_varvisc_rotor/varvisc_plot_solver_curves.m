@@ -1,5 +1,5 @@
 function [h, legLabels] = varvisc_plot_solver_curves(ax, xax, stats, xlab, opts)
-%PLOT_SOLVER_CURVES  Overlay every solver's iteration curve on one log axes.
+%PLOT_SOLVER_CURVES  Overlay every solver's iteration curve on shared axes.
 %
 %   [H, LEGLABELS] = PLOT_SOLVER_CURVES(AX, XAX, STATS, XLAB, OPTS)
 %
@@ -44,7 +44,7 @@ function [h, legLabels] = varvisc_plot_solver_curves(ax, xax, stats, xlab, opts)
     end
     hold(ax, 'off');
 
-    set(ax, 'YScale', 'log');
+    set(ax, 'YScale', opts.yscale);
     grid(ax, 'on');
     if ~isempty(xlab), xlabel(ax, xlab); end
     % 'Krylov', not 'MINRES': the registry now mixes MINRES arms with the GMRES
