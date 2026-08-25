@@ -23,9 +23,7 @@ function params = make_varvisc_schur_params()
     % Step 1 always builds each object. A finite R rebuilds at
     % 1,1+R,1+2R,...; Inf freezes the step-1 object.
     params.SMALL_BASIS_REFRESH = Inf;
-    params.DEFLAT_GAUSSIAN_LARGE_REFRESH = Inf;
-    params.DEFLAT_SEQUENTIAL_SHARED_LARGE_REFRESH = Inf;
-    params.DEFLAT_CONCATENATED_ONCE_LARGE_REFRESH = Inf;
+    params.DEFLAT_SHARED_LARGE_REFRESH = Inf;
     params.DEFLAT_ADAPTIVE_LIFT_LARGE_REFRESH = Inf;
     params.skip_unprecond = false;
     params.COMPUTE_SPECTRUM = false;

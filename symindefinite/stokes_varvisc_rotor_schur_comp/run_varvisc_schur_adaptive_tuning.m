@@ -289,8 +289,7 @@ end
 function [summary,steps] = local_run_comparison(winner,baseParams,seed)
     params = local_apply_config(baseParams,winner);
     params.q = 1;
-    params.DEFLAT_SEQUENTIAL_SHARED_LARGE_REFRESH = Inf;
-    params.DEFLAT_CONCATENATED_ONCE_LARGE_REFRESH = Inf;
+    params.DEFLAT_SHARED_LARGE_REFRESH = Inf;
     params.standalone_variants = [ ...
         struct('name','deflate_adaptive_small_lift_large', ...
                'design','adaptive_small_lift_large'), ...

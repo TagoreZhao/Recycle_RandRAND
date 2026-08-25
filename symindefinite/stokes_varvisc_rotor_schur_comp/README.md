@@ -320,13 +320,15 @@ start.
 | `deflate_concatenated_once` | one standard deflator built from the concatenated small+large basis |
 | `deflate_adaptive_small_lift_large` | adaptive small-mode lift followed by large-mode deflation of the lifted operator |
 
-The default nominal dimensions are `sm_eig=20` and `lg_eig=50`. Lanczos
+The default nominal dimensions are `sm_eig=20` and `lg_eig=100`. Lanczos
 returns `sm_eig` small vectors. Every Gaussian construction draws
 `ceil(sketch_oversampling*k)` columns and retains the entire orthogonalized
 basis. With the default `sketch_oversampling=2`, the large-tail bases contain
 `2*lg_eig` vectors, the adaptive post-lift large basis contains
 `2*(sm_eig+lg_eig)` vectors, and the inverse-Gaussian small basis contains
-`2*sm_eig` vectors. The large-arm random draws remain independent.
+`2*sm_eig` vectors. The standalone, sequential, and concatenated arms reuse
+one large-tail random draw and basis built from the original $S_n$. The
+adaptive arm keeps an independent draw because it sketches the lifted operator.
 
 The central small source is selected by `small_basis_source`:
 
@@ -361,17 +363,18 @@ The reusable objects have distinct refresh rules:
    reuses it as a preconditioner for later $S_n$. This is the factor that
    becomes stale in moving-viscosity cases.
 3. `SMALL_BASIS_REFRESH` controls the one shared small basis.
-4. `DEFLAT_GAUSSIAN_LARGE_REFRESH`,
-   `DEFLAT_SEQUENTIAL_SHARED_LARGE_REFRESH`,
-   `DEFLAT_CONCATENATED_ONCE_LARGE_REFRESH`, and
-   `DEFLAT_ADAPTIVE_LIFT_LARGE_REFRESH` independently control the four large
-   caches. Step 1 always builds each enabled object; a finite value $R$
+4. `DEFLAT_SHARED_LARGE_REFRESH` controls the original-$S_n$ large basis
+   shared by the standalone, sequential, and concatenated arms.
+   `DEFLAT_ADAPTIVE_LIFT_LARGE_REFRESH` independently controls the transformed
+   post-lift basis. Step 1 always builds each enabled object; a finite value $R$
    rebuilds it at steps $1,1+R,1+2R,\ldots$. Every interval defaults to `Inf`.
 
 A shared-small refresh causes the sequential and one-shot designs to recombine
-their cached large basis with the new small basis. It also forces the adaptive
+the shared large basis with the new small basis. It also forces the adaptive
 post-lift large sketch to rebuild because that sketch acts on a newly lifted
-operator. Refreshing a large-only cache never rebuilds the shared small basis.
+operator. Refreshing the shared large cache recombines both original-operator
+two-tail bases but never rebuilds the shared small basis. Legacy per-arm large
+refresh fields are accepted only when their values agree.
 
 The one-tail deflation preconditioners act directly on the current SPD matrix:
 

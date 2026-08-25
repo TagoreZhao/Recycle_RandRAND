@@ -70,6 +70,8 @@ cfg_dump.deflat_tail_dim = all_stats{1}.deflat_tail_dim;
 cfg_dump.basis_built_step = all_stats{1}.basis_built_step;
 cfg_dump.large_basis_built_step = all_stats{1}.large_basis_built_step;
 cfg_dump.small_basis_built_step = all_stats{1}.small_basis_built_step;
+cfg_dump.shared_large_basis_built_step = ...
+    all_stats{1}.shared_large_basis_built_step;
 cfg_dump.small_basis_source = all_stats{1}.small_basis_source;
 cfg_dump.mesh_N = msh.N;
 cfg_dump.matlab = version;
@@ -79,9 +81,7 @@ fid = fopen(fullfile(results_root,'run_config.json'),'w');
 if fid > 0
     json_dump = cfg_dump;
     refresh_fields = {'SMALL_BASIS_REFRESH', ...
-                      'DEFLAT_GAUSSIAN_LARGE_REFRESH', ...
-                      'DEFLAT_SEQUENTIAL_SHARED_LARGE_REFRESH', ...
-                      'DEFLAT_CONCATENATED_ONCE_LARGE_REFRESH', ...
+                      'DEFLAT_SHARED_LARGE_REFRESH', ...
                       'DEFLAT_ADAPTIVE_LIFT_LARGE_REFRESH'};
     for ri = 1:numel(refresh_fields)
         field = refresh_fields{ri};

@@ -1,7 +1,8 @@
 function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
 %SOLVE_VARVISC_SCHUR_SEQUENCE  PCG benchmark on Schur operator handles.
 %   All two-tail designs share one centrally refreshed smallest-mode basis.
-%   Each design that needs a largest-mode sketch owns an independent cache.
+%   The original-operator arms also share one largest-mode Gaussian sketch;
+%   the adaptive arm owns a separate sketch of its lifted operator.
 
     import src.precond.*
     if nargin < 3, save_dir = ''; end
@@ -28,6 +29,7 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
     Rfrozen = []; invApply = []; nS_frozen = -1; Omega = [];
     pressureOmega = [];
     smallState = local_empty_small_state();
+    sharedLargeState = local_empty_shared_large_state();
     states = local_empty_arm_states();
 
     for step = 1:nsteps
@@ -169,6 +171,11 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
             Astat.lambda_hi_target(step) = cutoffs.lambdaHi;
             Astat.tau_star_target(step) = cutoffs.tauStar;
 
+            [sharedLargeState,sharedLargeRefreshed,Astat] = ...
+                local_refresh_shared_large_state( ...
+                sharedLargeState,Astat,Sapply,nS,cutoffs,settings, ...
+                refresh,variants,step);
+
             smallRefreshed = false;
             refreshSmall = smallNeeded && (isempty(smallState.V) || ...
                 local_refresh_due(step,refresh.small));
@@ -195,8 +202,9 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
             end
 
             [states,Astat] = local_refresh_arm_states( ...
-                states,Astat,Sapply,nS,smallState,smallRefreshed,cutoffs, ...
-                settings,refresh,variants,step);
+                sharedLargeState,states,Astat,Sapply,nS,smallState, ...
+                smallRefreshed,sharedLargeRefreshed,cutoffs,settings, ...
+                refresh,variants,step);
             if smallNeeded
                 Astat.lift_tau(step) = smallState.liftTau;
                 Astat.small_basis_dim_history(step) = size(smallState.V,2);
@@ -207,7 +215,7 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
                 [Papply,spectralApply,Vdim,largeDim,tauValues, ...
                     basisStep,largeStep] = ...
                     local_make_preconditioner( ...
-                    variant.design,Sapply,smallState,states, ...
+                    variant.design,Sapply,smallState,sharedLargeState,states, ...
                     settings.plotExtremeEigenvalues);
                 key = variant.name;
                 Astat.deflat_dim.(key) = Vdim;
@@ -554,6 +562,7 @@ function Astat = local_prealloc(keys,labels,nsteps,settings)
     Astat.deflat_tail_dim = struct();
     Astat.small_basis_source = settings.smallSource;
     Astat.small_basis_built_step = [];
+    Astat.shared_large_basis_built_step = [];
     Astat.small_basis_info = {};
     Astat.small_basis_ritz_values = {};
     Astat.sketch_oversampling = settings.oversampling;
@@ -566,18 +575,51 @@ end
 function refresh = local_refresh_intervals(params)
     refresh.small = local_refresh_value(params,'SMALL_BASIS_REFRESH', ...
         {'DEFLAT_SMALL_PREC_REFRESH','DEFLAT_PREC_REFRESH'});
-    refresh.gaussianLarge = local_refresh_value( ...
-        params,'DEFLAT_GAUSSIAN_LARGE_REFRESH', ...
-        {'DEFLAT_LARGE_PREC_REFRESH','DEFLAT_PREC_REFRESH'});
-    refresh.sequential = local_refresh_value( ...
-        params,'DEFLAT_SEQUENTIAL_SHARED_LARGE_REFRESH', ...
-        {'DEFLAT_BOTH_PREC_REFRESH','DEFLAT_PREC_REFRESH'});
-    refresh.concatenated = local_refresh_value( ...
-        params,'DEFLAT_CONCATENATED_ONCE_LARGE_REFRESH', ...
-        {'DEFLAT_BOTH_PREC_REFRESH','DEFLAT_PREC_REFRESH'});
+    refresh.sharedLarge = local_shared_large_refresh_value(params);
     refresh.adaptive = local_refresh_value( ...
         params,'DEFLAT_ADAPTIVE_LIFT_LARGE_REFRESH', ...
         {'DEFLAT_BOTH_PREC_REFRESH','DEFLAT_PREC_REFRESH'});
+end
+
+function value = local_shared_large_refresh_value(params)
+    newField = 'DEFLAT_SHARED_LARGE_REFRESH';
+    legacyFields = {'DEFLAT_GAUSSIAN_LARGE_REFRESH', ...
+        'DEFLAT_SEQUENTIAL_SHARED_LARGE_REFRESH', ...
+        'DEFLAT_CONCATENATED_ONCE_LARGE_REFRESH', ...
+        'DEFLAT_LARGE_PREC_REFRESH','DEFLAT_BOTH_PREC_REFRESH', ...
+        'DEFLAT_PREC_REFRESH'};
+    value = Inf;
+    if isfield(params,newField) && ~isempty(params.(newField))
+        value = params.(newField);
+        local_validate_refresh_value(value,newField);
+    end
+
+    legacyValues = [];
+    legacyNames = {};
+    for index = 1:numel(legacyFields)
+        field = legacyFields{index};
+        if isfield(params,field) && ~isempty(params.(field))
+            legacyValue = params.(field);
+            local_validate_refresh_value(legacyValue,field);
+            legacyValues(end+1) = legacyValue; %#ok<AGROW>
+            legacyNames{end+1} = field; %#ok<AGROW>
+        end
+    end
+    if isempty(legacyValues), return; end
+
+    commonLegacyValue = legacyValues(1);
+    if any(legacyValues ~= commonLegacyValue)
+        error('solve_varvisc_schur_sequence:conflictingLargeRefresh', ...
+              ['Legacy large-basis refresh fields must agree now that the ', ...
+               'original-operator large basis is shared; got %s.'], ...
+              strjoin(legacyNames,', '));
+    end
+    if ~isinf(value) && value ~= commonLegacyValue
+        error('solve_varvisc_schur_sequence:conflictingLargeRefresh', ...
+              ['%s conflicts with the legacy large-basis refresh value. ', ...
+               'Specify only %s.'],newField,newField);
+    end
+    if isinf(value), value = commonLegacyValue; end
 end
 
 function value = local_refresh_value(params,newField,legacyFields)
@@ -593,12 +635,16 @@ function value = local_refresh_value(params,newField,legacyFields)
             end
         end
     end
+    local_validate_refresh_value(value,newField);
+end
+
+function local_validate_refresh_value(value,field)
     valid = isnumeric(value) && isreal(value) && isscalar(value) && ...
         ((isinf(value) && value > 0) || ...
          (isfinite(value) && value >= 1 && value == floor(value)));
     if ~valid
         error('solve_varvisc_schur_sequence:badDeflatRefresh', ...
-              '%s must be a positive integer or Inf.',newField);
+              '%s must be a positive integer or Inf.',field);
     end
 end
 
@@ -615,6 +661,12 @@ end
 function needed = local_large_needed(variants)
     designs = {variants.design};
     needed = any(~strcmp(designs,'shared_small'));
+end
+
+function needed = local_shared_large_needed(variants)
+    designs = {variants.design};
+    needed = any(ismember(designs,{'gaussian_large', ...
+        'sequential_shared_subspace','concatenated_once'}));
 end
 
 function width = local_small_basis_width(settings,needed)
@@ -649,12 +701,13 @@ function state = local_empty_small_state()
 end
 
 function states = local_empty_arm_states()
-    empty = struct('V',[],'largeV',[],'tau1',NaN,'tau2',NaN, ...
-                   'basisBuildStep',NaN,'largeBuildStep',NaN);
-    states.gaussian_large = empty;
-    states.sequential_shared_subspace = empty;
-    states.concatenated_once = empty;
-    states.adaptive_small_lift_large = empty;
+    combined = struct('V',[],'tau1',NaN,'tau2',NaN, ...
+                      'basisBuildStep',NaN);
+    adaptive = struct('V',[],'tau1',NaN,'tau2',NaN, ...
+                      'basisBuildStep',NaN,'largeBuildStep',NaN);
+    states.sequential_shared_subspace = combined;
+    states.concatenated_once = combined;
+    states.adaptive_small_lift_large = adaptive;
 end
 
 function smallState = local_build_small_state( ...
@@ -703,34 +756,33 @@ function smallState = local_build_small_state( ...
         'directTau',directTau,'info',info,'basisBuildStep',step);
 end
 
-function [states,Astat] = local_refresh_arm_states( ...
-        states,Astat,Sapply,nS,smallState,smallRefreshed,cutoffs, ...
-        settings,refresh,variants,step)
-    if local_design_enabled(variants,'gaussian_large') && ...
-            (isempty(states.gaussian_large.V) || ...
-             local_refresh_due(step,refresh.gaussianLarge))
-        [V,~] = gaussian_subspace_basis( ...
-            Sapply,nS,settings.lgEig,settings.largeQ,settings.oversampling);
-        states.gaussian_large.V = V;
-        states.gaussian_large.tau1 = cutoffs.lambdaHi;
-        states.gaussian_large.basisBuildStep = step;
-        states.gaussian_large.largeBuildStep = step;
-    end
+function state = local_empty_shared_large_state()
+    state = struct('V',[],'tau',NaN,'basisBuildStep',NaN);
+end
 
+function [state,refreshed,Astat] = local_refresh_shared_large_state( ...
+        state,Astat,Sapply,nS,cutoffs,settings,refresh,variants,step)
+    refreshed = false;
+    if ~local_shared_large_needed(variants) || ...
+            ~(isempty(state.V) || local_refresh_due(step,refresh.sharedLarge))
+        return
+    end
+    [state.V,~] = gaussian_subspace_basis( ...
+        Sapply,nS,settings.lgEig,settings.largeQ,settings.oversampling);
+    state.tau = cutoffs.lambdaHi;
+    state.basisBuildStep = step;
+    refreshed = true;
+    Astat.shared_large_basis_built_step(end+1) = step;
+end
+
+function [states,Astat] = local_refresh_arm_states( ...
+        sharedLargeState,states,Astat,Sapply,nS,smallState,smallRefreshed, ...
+        sharedLargeRefreshed,cutoffs,settings,refresh,variants,step)
     if local_design_enabled(variants,'sequential_shared_subspace')
-        largeRefreshed = isempty(states.sequential_shared_subspace.largeV) || ...
-            local_refresh_due(step,refresh.sequential);
-        if largeRefreshed
-            [Vlarge,~] = gaussian_subspace_basis( ...
-                Sapply,nS,settings.lgEig,settings.largeQ, ...
-                settings.oversampling);
-            states.sequential_shared_subspace.largeV = Vlarge;
-            states.sequential_shared_subspace.largeBuildStep = step;
-        end
-        if largeRefreshed || smallRefreshed || ...
+        if sharedLargeRefreshed || smallRefreshed || ...
                 isempty(states.sequential_shared_subspace.V)
             states.sequential_shared_subspace.V = local_combine_bases( ...
-                states.sequential_shared_subspace.largeV,smallState.V);
+                sharedLargeState.V,smallState.V);
             states.sequential_shared_subspace.tau1 = cutoffs.lambdaHi;
             states.sequential_shared_subspace.tau2 = cutoffs.tauStar;
             states.sequential_shared_subspace.basisBuildStep = step;
@@ -738,18 +790,10 @@ function [states,Astat] = local_refresh_arm_states( ...
     end
 
     if local_design_enabled(variants,'concatenated_once')
-        largeRefreshed = isempty(states.concatenated_once.largeV) || ...
-            local_refresh_due(step,refresh.concatenated);
-        if largeRefreshed
-            [Vlarge,~] = gaussian_subspace_basis( ...
-                Sapply,nS,settings.lgEig,settings.largeQ, ...
-                settings.oversampling);
-            states.concatenated_once.largeV = Vlarge;
-            states.concatenated_once.largeBuildStep = step;
-        end
-        if largeRefreshed || smallRefreshed || isempty(states.concatenated_once.V)
+        if sharedLargeRefreshed || smallRefreshed || ...
+                isempty(states.concatenated_once.V)
             states.concatenated_once.V = local_combine_bases( ...
-                states.concatenated_once.largeV,smallState.V);
+                sharedLargeState.V,smallState.V);
             states.concatenated_once.tau1 = cutoffs.tauStar;
             states.concatenated_once.basisBuildStep = step;
         end
@@ -775,12 +819,10 @@ function [states,Astat] = local_refresh_arm_states( ...
     end
 
     Astat.deflat_tail_dim.shared_small = size(smallState.V,2);
-    Astat.deflat_tail_dim.gaussian_large = ...
-        size(states.gaussian_large.V,2);
-    Astat.deflat_tail_dim.sequential_large = ...
-        size(states.sequential_shared_subspace.largeV,2);
-    Astat.deflat_tail_dim.concatenated_large = ...
-        size(states.concatenated_once.largeV,2);
+    Astat.deflat_tail_dim.shared_large = size(sharedLargeState.V,2);
+    Astat.deflat_tail_dim.gaussian_large = size(sharedLargeState.V,2);
+    Astat.deflat_tail_dim.sequential_large = size(sharedLargeState.V,2);
+    Astat.deflat_tail_dim.concatenated_large = size(sharedLargeState.V,2);
     Astat.deflat_tail_dim.adaptive_large = ...
         size(states.adaptive_small_lift_large.V,2);
 end
@@ -795,7 +837,7 @@ end
 
 function [Papply,spectralApply,Vdim,largeDim,tauValues,basisStep,largeStep] = ...
         local_make_preconditioner( ...
-        design,Sapply,smallState,states,needSpectralApply)
+        design,Sapply,smallState,sharedLargeState,states,needSpectralApply)
     tauValues = struct('first',NaN,'second',NaN);
     largeDim = 0;
     spectralApply = [];
@@ -814,18 +856,17 @@ function [Papply,spectralApply,Vdim,largeDim,tauValues,basisStep,largeStep] = ..
             basisStep = smallState.basisBuildStep;
             largeStep = NaN;
         case 'gaussian_large'
-            state = states.gaussian_large;
-            tauValues.first = state.tau1;
+            tauValues.first = sharedLargeState.tau;
             Papply = src.precond.deflation_P_apply( ...
-                state.V,Sapply,tauValues.first,'handle',0);
+                sharedLargeState.V,Sapply,tauValues.first,'handle',0);
             if needSpectralApply
                 Phalf = src.precond.deflation_Psqrt_apply( ...
-                    state.V,Sapply,tauValues.first,'handle');
+                    sharedLargeState.V,Sapply,tauValues.first,'handle');
                 spectralApply = @(X) Phalf(Sapply(Phalf(X)));
             end
-            Vdim = size(state.V,2); largeDim = Vdim;
-            basisStep = state.basisBuildStep;
-            largeStep = state.largeBuildStep;
+            Vdim = size(sharedLargeState.V,2); largeDim = Vdim;
+            basisStep = sharedLargeState.basisBuildStep;
+            largeStep = sharedLargeState.basisBuildStep;
         case 'sequential_shared_subspace'
             state = states.sequential_shared_subspace;
             tauValues.first = state.tau1;
@@ -842,9 +883,9 @@ function [Papply,spectralApply,Vdim,largeDim,tauValues,basisStep,largeStep] = ..
                 spectralApply = @(X) P2half(S1apply(P2half(X)));
             end
             Vdim = size(state.V,2);
-            largeDim = size(state.largeV,2);
+            largeDim = size(sharedLargeState.V,2);
             basisStep = state.basisBuildStep;
-            largeStep = state.largeBuildStep;
+            largeStep = sharedLargeState.basisBuildStep;
         case 'concatenated_once'
             state = states.concatenated_once;
             tauValues.first = state.tau1;
@@ -856,9 +897,9 @@ function [Papply,spectralApply,Vdim,largeDim,tauValues,basisStep,largeStep] = ..
                 spectralApply = @(X) Phalf(Sapply(Phalf(X)));
             end
             Vdim = size(state.V,2);
-            largeDim = size(state.largeV,2);
+            largeDim = size(sharedLargeState.V,2);
             basisStep = state.basisBuildStep;
-            largeStep = state.largeBuildStep;
+            largeStep = sharedLargeState.basisBuildStep;
         case 'adaptive_small_lift_large'
             state = states.adaptive_small_lift_large;
             tauValues.first = state.tau2;
