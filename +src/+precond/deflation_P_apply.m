@@ -24,8 +24,9 @@ function [Papply, E, decE] = deflation_P_apply(V, A, tau, output_type, RAND_EIGS
             error('Coarse matrix V''AV is not numerically SPD (chol flag=%d).', flag);
         end
 
+        Rt = R';
         Z.V_fun  = @(x) V.V_fun(R\x);
-        Z.V_fun_t  = @(x) (V.V_fun_t(x)'/R)';
+        Z.V_fun_t  = @(x) Rt\V.V_fun_t(x);
 
         decE = struct();
         decE.E  = E;
@@ -34,11 +35,13 @@ function [Papply, E, decE] = deflation_P_apply(V, A, tau, output_type, RAND_EIGS
         
         % Apply P: P = (I - VV') + \tau V(V'AV)^{-1}V'
         % Apply P: PX = X - V(V'X) + tau * Z(Z'X)
-        Papply = @(X) X - V.V_fun(V.V_fun_t(X)) + tau * Z.V_fun(Z.V_fun_t(X));
+        Papply = @(X) local_struct_apply( ...
+            X,V.V_fun,V.V_fun_t,R,Rt,tau);
     else
         % Build coarse matrix E = V' A V
         AV = apply_A(A, V);
-        E  = (V' * AV);
+        Vt = V';
+        E  = Vt*AV;
         E  = (E + E')/2;
 
         % Cholesky on coarse matrix
@@ -50,6 +53,7 @@ function [Papply, E, decE] = deflation_P_apply(V, A, tau, output_type, RAND_EIGS
         % "Move inverse inside" by absorbing R^{-1} into the basis:
         % Z := V / R  so that  V E^{-1} V' = Z Z'
         Z  = V / R;
+        Zt = Z';
 
         decE = struct();
         decE.E  = E;
@@ -58,10 +62,20 @@ function [Papply, E, decE] = deflation_P_apply(V, A, tau, output_type, RAND_EIGS
 
         % Apply P: PX = X - V(V'X) + tau * Z(Z'X)
         if strcmp(output_type, 'handle')
-            Papply = @(X) X - V*(V'*X) + tau * Z*(Z'*X);
+            Papply = @(X) local_numeric_apply(X,V,Vt,Z,Zt,tau);
         else
             n = size(V, 1);
-            Papply = eye(n) - V*V' + tau * (Z*Z');
+            Papply = eye(n) - V*Vt + tau*(Z*Zt);
         end
     end
+end
+
+function Y = local_struct_apply(X,Vfun,Vtfun,R,Rt,tau)
+    coefficients = Vtfun(X);
+    coarseSolve = R\(Rt\coefficients);
+    Y = X - Vfun(coefficients) + tau*Vfun(coarseSolve);
+end
+
+function Y = local_numeric_apply(X,V,Vt,Z,Zt,tau)
+    Y = X - V*(Vt*X) + tau*Z*(Zt*X);
 end

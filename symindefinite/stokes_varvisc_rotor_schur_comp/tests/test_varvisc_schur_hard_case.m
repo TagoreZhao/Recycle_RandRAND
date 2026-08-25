@@ -9,6 +9,7 @@ p.Tstep = 7;                 % six solves: phase 0 -> pi
 p.max_steps = 6;
 p.standalone_variants = [];
 p.COMPUTE_SPECTRUM = false;
+p.EXACT_REFERENCE_DIAGNOSTICS = true;
 
 cfg = varvisc_schur_make_cfg('disk_static_nu_checkerboard_shift',p,[]);
 ctx = varvisc_schur_context_init(cfg,p);
@@ -31,7 +32,8 @@ for st = {s1,se}
     S = op.to_dense();
     assert(norm(S-S','fro')<1e-13*norm(S,'fro'),'S is nonsymmetric.');
     [~,flag] = chol(S); assert(flag==0,'S is not SPD.');
-    xr = op.K\op.b;
+    [K,b] = op.materialize_kkt();
+    xr = K\b;
     xs = op.recover(S\op.rhs_S);
     assert(norm(xs-xr)/max(norm(xr),eps)<1e-10,'Schur recovery differs from K\b.');
 end
@@ -48,6 +50,10 @@ assert(q01<0.05 && q99>20, ...
        'Generalized spectrum is not broadly spread beyond isolated outliers.');
 
 A = solve_varvisc_schur_sequence(cfg,p,'');
+assert(isequal(A.kkt_materialized_step,1:p.max_steps), ...
+       'Exact diagnostics did not record every requested KKT materialization.');
+assert(all(isfinite(A.backslash_relres)) && all(isfinite(A.vel_recovery_err)), ...
+       'Exact-reference diagnostics were not populated.');
 assert(all(A.solver_flag.pcg_unprec==0) && all(A.solver_flag.chol==0), ...
        'A hard-case PCG arm failed to converge.');
 assert(max(A.solver_err.pcg_unprec)<1e-5 && max(A.solver_err.chol)<1e-5, ...

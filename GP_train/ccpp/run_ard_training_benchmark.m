@@ -14,6 +14,7 @@ function outputs = run_ard_training_benchmark(varargin)
 %     'NumSteps'      optimizer parameter states (30)
 %     'NumProbes'     fixed Rademacher probes per state (8)
 %     'Rank'          exact-deflation target rank (100)
+%     'SketchQList'   Gaussian-sketch power counts (1)
 %     'SpectrumCount' absolute eigenvalues retained per tail (500)
 %     'SolverKeys'    optional subset of registry keys (all)
 %
@@ -118,7 +119,7 @@ function params = parse_options(thisDir, varargin)
     p.addParameter('Seed', 0);
     p.addParameter('Rank', 100);
     p.addParameter('Tau', 0.5);
-    p.addParameter('SketchQList', [1 2 3]);
+    p.addParameter('SketchQList', 1);
     p.addParameter('SketchOversample', 2);
     p.addParameter('AdamRate', 0.05);
     p.addParameter('SpectrumCount', 500);
@@ -126,6 +127,7 @@ function params = parse_options(thisDir, varargin)
     p.parse(varargin{:});
     params = p.Results;
     params.SmokeTest = logical(params.SmokeTest);
+    params.SketchQList = unique(params.SketchQList(:).', 'stable');
     params.InitialSignalVariance = 1;
     params.InitialNoiseVariance = 0.1;
     params.LengthscaleBounds = [0.05 20];
@@ -162,6 +164,10 @@ function methods = method_registry(params)
     for q = params.SketchQList(:).'
         methods(end+1) = entry(sprintf('defl_sketch_q%d_recycle_once', q), ...
                                'defl_sketch', 'recycle_once', q); %#ok<AGROW>
+        if q == 1
+            methods(end+1) = entry('defl_sketch_q1_recycle_full', ...
+                                   'defl_sketch', 'recycle_full', q); %#ok<AGROW>
+        end
         methods(end+1) = entry(sprintf('defl_sketch_q%d_fresh_oracle', q), ...
                                'defl_sketch', 'fresh_oracle', q); %#ok<AGROW>
     end
@@ -185,7 +191,7 @@ end
 function [solveT, trainT, summary] = train_one_method(method, Xtr, ytr, Xte, yte, ...
         theta, lower, upper, probes, sketchOmega, D2parts, initialNlml, params)
     n = size(Xtr, 1);
-    state = struct('V', [], 'L', []);
+    state = struct('V', [], 'L', [], 'Mfun', []);
     adamM = zeros(size(theta));
     adamV = zeros(size(theta));
     previousA = [];
@@ -349,7 +355,7 @@ function [Mfun, state, setup] = build_step_preconditioner(method, A, Amul, K, ..
                 setup.basis_build_time = toc(t); setup.basis_rebuilt = true;
             end
             t = tic; Mfun = src.precond.deflation_P_apply(state.V, Amul, params.Tau);
-            setup.coarse_build_time = toc(t);
+            setup.coarse_build_time = toc(t); setup.coarse_rebuilt = true;
 
         case 'defl_sketch'
             if rebuild
@@ -358,8 +364,15 @@ function [Mfun, state, setup] = build_step_preconditioner(method, A, Amul, K, ..
                 [state.V, ~] = qr(Y, 0);
                 setup.basis_build_time = toc(t); setup.basis_rebuilt = true;
             end
-            t = tic; Mfun = src.precond.deflation_P_apply(state.V, Amul, params.Tau);
-            setup.coarse_build_time = toc(t);
+            if strcmp(method.refresh, 'recycle_full') && ~isempty(state.Mfun)
+                Mfun = state.Mfun;
+            else
+                t = tic; Mfun = src.precond.deflation_P_apply(state.V, Amul, params.Tau);
+                setup.coarse_build_time = toc(t); setup.coarse_rebuilt = true;
+                if strcmp(method.refresh, 'recycle_full')
+                    state.Mfun = Mfun;
+                end
+            end
 
         otherwise
             error('run_ard_training_benchmark:badMethodKind', 'Unknown kind: %s', method.kind);
@@ -370,7 +383,8 @@ end
 function setup = empty_setup()
     setup = struct('setup_time', 0, 'factor_build_time', 0, ...
                    'basis_build_time', 0, 'coarse_build_time', 0, ...
-                   'factor_rebuilt', false, 'basis_rebuilt', false);
+                   'factor_rebuilt', false, 'basis_rebuilt', false, ...
+                   'coarse_rebuilt', false);
 end
 
 function row = make_solve_row(method, step, rhsIndex, iterations, flag, relres, ...
@@ -406,7 +420,8 @@ function row = make_training_row(method, step, theta, grad, matrixChange, ...
         'basis_build_time', setup.basis_build_time, ...
         'coarse_build_time', setup.coarse_build_time, ...
         'factor_rebuilt', setup.factor_rebuilt, ...
-        'basis_rebuilt', setup.basis_rebuilt, 'completed', completed);
+        'basis_rebuilt', setup.basis_rebuilt, ...
+        'coarse_rebuilt', setup.coarse_rebuilt, 'completed', completed);
 end
 
 function row = empty_summary()

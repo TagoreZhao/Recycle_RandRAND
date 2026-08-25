@@ -3,6 +3,8 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
 %   All two-tail designs share one centrally refreshed smallest-mode basis.
 %   The original-operator arms also share one largest-mode Gaussian sketch;
 %   the adaptive arm owns a separate sketch of its lifted operator.
+%   A tighter matrix-free PCG solve supplies the per-step reference and state;
+%   the full KKT matrix is built only for opt-in exact-reference diagnostics.
 
     import src.precond.*
     if nargin < 3, save_dir = ''; end
@@ -26,7 +28,7 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
     SFirstApply = []; SPrevApply = []; nSFirst = -1;
     SFirstDense = []; SPrevDense = [];
     A_prev = []; D_prev = []; C_prev = [];
-    Rfrozen = []; invApply = []; nS_frozen = -1; Omega = [];
+    Rfrozen = []; RfrozenT = []; invApply = []; nS_frozen = -1; Omega = [];
     pressureOmega = [];
     smallState = local_empty_small_state();
     sharedLargeState = local_empty_shared_large_state();
@@ -70,17 +72,6 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
                 max(norm(C_prev,'fro'),eps);
         end
 
-        x_ref = st.K\st.b;
-        Astat.backslash_relres(step) = ...
-            norm(st.K*x_ref-st.b)/max(norm(st.b),eps);
-        y_ref = x_ref(ctx.nU+1:end);
-        y_ref_keep = y_ref(st.keep);
-        x_schur = st.recover(y_ref_keep);
-        Astat.vel_recovery_err(step) = ...
-            norm(x_schur-x_ref)/max(norm(x_ref),eps);
-        Astat.schur_ref_relres(step) = ...
-            norm(Sapply(y_ref_keep)-rhs)/max(norm(rhs),eps);
-
         if settings.exactDenseDiagnostics
             [Sdense,Astat] = local_require_dense(Sdense,st,Astat,step);
             if isempty(SFirstDense), SFirstDense = Sdense; end
@@ -108,13 +99,6 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
         rhsScaled = rhs/rhsNorm;
         x0Scaled = x0/rhsNorm;
 
-        if ~settings.skipUnpreconditioned
-            [xs,fl,rr,it] = pcg(Sapply,rhsScaled,settings.solverTol, ...
-                settings.solverMaxit,[],[],x0Scaled);
-            Astat = local_record(Astat,'pcg_unprec',step,xs,fl,rr,it, ...
-                rhsNorm,y_ref_keep);
-        end
-
         if isempty(Rfrozen)
             [Sdense,Astat] = local_require_dense(Sdense,st,Astat,step);
             if isempty(Rcurrent)
@@ -125,19 +109,55 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
                       'chol(S) failed at step %d.',step);
             end
             Rfrozen = Rcurrent;
-            invApply = @(X) Rfrozen'\(Rfrozen\X);
+            RfrozenT = Rfrozen';
+            invApply = @(X) RfrozenT\(Rfrozen\X);
             nS_frozen = nS;
             Astat.chol_built_step(end+1) = step;
         elseif nS ~= nS_frozen
             error('solve_varvisc_schur_sequence:changingFrozenSize', ...
                   'Cannot reuse frozen factors after a dimension change.');
         end
+
+        [referenceScaled,referenceFlag,referenceRelres,referenceIt] = pcg( ...
+            Sapply,rhsScaled,settings.referenceTol,settings.referenceMaxit, ...
+            invApply,[],x0Scaled);
+        if referenceFlag ~= 0
+            error('solve_varvisc_schur_sequence:referenceFailed', ...
+                  ['Matrix-free reference solve failed at step %d ', ...
+                   '(flag %d, relres %.3e, iterations %d).'], ...
+                  step,referenceFlag,referenceRelres,referenceIt);
+        end
+        y_ref_keep = referenceScaled*rhsNorm;
+        x_ref = st.recover(y_ref_keep);
+        Astat.reference_flag(step) = referenceFlag;
+        Astat.reference_relres(step) = referenceRelres;
+        Astat.reference_its(step) = referenceIt;
+        Astat.schur_ref_relres(step) = ...
+            norm(Sapply(y_ref_keep)-rhs)/max(norm(rhs),eps);
+
+        if settings.exactReferenceDiagnostics
+            [Kexact,bexact] = st.materialize_kkt();
+            Astat.kkt_materialized_step(end+1) = step;
+            x_exact = Kexact\bexact;
+            Astat.backslash_relres(step) = ...
+                norm(Kexact*x_exact-bexact)/max(norm(bexact),eps);
+            Astat.vel_recovery_err(step) = ...
+                norm(x_ref-x_exact)/max(norm(x_exact),eps);
+        end
+
+        if ~settings.skipUnpreconditioned
+            [xs,fl,rr,it] = pcg(Sapply,rhsScaled,settings.solverTol, ...
+                settings.solverMaxit,[],[],x0Scaled);
+            Astat = local_record(Astat,'pcg_unprec',step,xs,fl,rr,it, ...
+                rhsNorm,y_ref_keep);
+        end
+
         [xs,fl,rr,it] = pcg(Sapply,rhsScaled,settings.solverTol, ...
             settings.solverMaxit,invApply,[],x0Scaled);
         Astat = local_record(Astat,'chol',step,xs,fl,rr,it, ...
             rhsNorm,y_ref_keep);
         if settings.plotExtremeEigenvalues
-            cholSpectrumApply = @(X) Rfrozen\(Sapply(Rfrozen'\X));
+            cholSpectrumApply = @(X) Rfrozen\(Sapply(RfrozenT\X));
             Astat = local_record_extreme_spectrum( ...
                 Astat,'chol',step,cholSpectrumApply,nS,settings);
         end
@@ -189,7 +209,8 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
                     error('solve_varvisc_schur_sequence:notSPD', ...
                           'chol(S) failed at step %d.',step);
                 end
-                currentInv = @(X) Rcurrent'\(Rcurrent\X);
+                RcurrentT = Rcurrent';
+                currentInv = @(X) RcurrentT\(Rcurrent\X);
             end
             if refreshSmall
                 smallState = local_build_small_state( ...
@@ -374,11 +395,16 @@ function settings = local_settings(params)
         params,'PLOT_EXTREME_EIGENVALUES',false);
     settings.exactDenseDiagnostics = local_param( ...
         params,'EXACT_DENSE_DIAGNOSTICS',false);
+    settings.exactReferenceDiagnostics = local_param( ...
+        params,'EXACT_REFERENCE_DIAGNOSTICS',false);
     settings.spectralTolerance = local_param( ...
         params,'SPECTRAL_RITZ_TOL',1e-10);
     settings.spectralMaxit = local_param(params,'SPECTRAL_RITZ_MAXIT',1000);
     settings.solverTol = local_param(params,'SOLVER_TOL',1e-8);
     settings.solverMaxit = local_param(params,'SOLVER_MAXIT',1e5);
+    settings.referenceTol = local_param(params,'REFERENCE_TOL',1e-10);
+    settings.referenceMaxit = local_param( ...
+        params,'REFERENCE_MAXIT',settings.solverMaxit);
 
     validateattributes(settings.smEig,{'numeric'}, ...
         {'scalar','integer','positive'},mfilename,'params.sm_eig');
@@ -394,12 +420,19 @@ function settings = local_settings(params)
         {'scalar','integer','nonnegative'},mfilename,'params.lift_large_q');
     validateattributes(settings.exactDenseDiagnostics,{'logical','numeric'}, ...
         {'scalar'},mfilename,'params.EXACT_DENSE_DIAGNOSTICS');
+    validateattributes(settings.exactReferenceDiagnostics, ...
+        {'logical','numeric'},{'scalar'},mfilename, ...
+        'params.EXACT_REFERENCE_DIAGNOSTICS');
     validateattributes(settings.plotExtremeEigenvalues,{'logical','numeric'}, ...
         {'scalar'},mfilename,'params.PLOT_EXTREME_EIGENVALUES');
     validateattributes(settings.spectralTolerance,{'numeric'}, ...
         {'scalar','real','finite','positive'},mfilename,'params.SPECTRAL_RITZ_TOL');
     validateattributes(settings.spectralMaxit,{'numeric'}, ...
         {'scalar','integer','positive'},mfilename,'params.SPECTRAL_RITZ_MAXIT');
+    validateattributes(settings.referenceTol,{'numeric'}, ...
+        {'scalar','real','finite','positive'},mfilename,'params.REFERENCE_TOL');
+    validateattributes(settings.referenceMaxit,{'numeric'}, ...
+        {'scalar','integer','positive'},mfilename,'params.REFERENCE_MAXIT');
     if ~ismember(settings.smallSource,{'lanczos','inverse_gaussian'})
         error('solve_varvisc_schur_sequence:badSmallSource', ...
               ['small_basis_source must be ''lanczos'' or ', ...
@@ -520,6 +553,7 @@ function Astat = local_prealloc(keys,labels,nsteps,settings)
         Astat.system_spectrum_is_exact.(key) = false(nsteps,1);
     end
     fields = {'backslash_relres','vel_recovery_err','schur_ref_relres', ...
+        'reference_flag','reference_relres','reference_its', ...
         'symmetry_res','symmetry_probe_res','chol_flag','ReldiffF', ...
         'RelInitdiffF','ReldiffProbe','RelInitdiffProbe','InvRelDiff', ...
         'coupling_change','A_change','D_change','pressure_schur_change', ...
@@ -568,7 +602,12 @@ function Astat = local_prealloc(keys,labels,nsteps,settings)
     Astat.sketch_oversampling = settings.oversampling;
     Astat.chol_built_step = [];
     Astat.dense_materialized_step = [];
+    Astat.kkt_materialized_step = [];
     Astat.exact_dense_diagnostics = logical(settings.exactDenseDiagnostics);
+    Astat.exact_reference_diagnostics = ...
+        logical(settings.exactReferenceDiagnostics);
+    Astat.reference_tol = settings.referenceTol;
+    Astat.reference_maxit = settings.referenceMaxit;
     Astat.plot_extreme_eigenvalues = logical(settings.plotExtremeEigenvalues);
 end
 

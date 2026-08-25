@@ -292,8 +292,8 @@ and matrix-drift diagnostics.
 
 ## 6. Recycled and fresh preconditioners
 
-The full ARD benchmark runs ten training arms. Every arm includes the time to
-build or update its preconditioner and the time for all target/probe solves.
+The default ARD benchmark runs seven training arms. Every arm includes the time
+to build or update its preconditioner and the time for all target/probe solves.
 
 | arm | basis or factor | refresh policy |
 |---|---|---|
@@ -301,12 +301,9 @@ build or update its preconditioner and the time for all target/probe solves.
 | `exact_chol_recycle_once` | exact $A_1=L_0L_0^\top$ | build $L_0$ once |
 | `defl_exact_recycle_once` | 100 largest-eigenvalue modes of $A_1$ | build $V_1$ once |
 | `defl_exact_fresh_oracle` | 100 largest-eigenvalue modes of $A_k$ | rebuild at every state |
-| `defl_sketch_q1_recycle_once` | $\mathrm{qr}(K_1\Omega)$ | build once |
+| `defl_sketch_q1_recycle_once` | $\mathrm{qr}(K_1\Omega)$ | freeze $V_1$; rebuild $V_1^\top A_kV_1$ |
+| `defl_sketch_q1_recycle_full` | $\mathrm{qr}(K_1\Omega)$ | freeze the complete state-1 preconditioner |
 | `defl_sketch_q1_fresh_oracle` | $\mathrm{qr}(K_k\Omega)$ | rebuild every state |
-| `defl_sketch_q2_recycle_once` | $\mathrm{qr}(K_1^2\Omega)$ | build once |
-| `defl_sketch_q2_fresh_oracle` | $\mathrm{qr}(K_k^2\Omega)$ | rebuild every state |
-| `defl_sketch_q3_recycle_once` | $\mathrm{qr}(K_1^3\Omega)$ | build once |
-| `defl_sketch_q3_fresh_oracle` | $\mathrm{qr}(K_k^3\Omega)$ | rebuild every state |
 
 ### Frozen exact Cholesky
 
@@ -357,15 +354,27 @@ product.
 “Recycle once” freezes the basis $V_1$, not the entire preconditioner. At every
 state the code recomputes the small coarse matrix $E_k=V_1^\top A_kV_1$ and its
 Cholesky factor, so the coarse correction still uses the current operator.
+“Recycle full” instead retains
+
+```math
+P_1=(I-V_1V_1^\top)+\tau V_1(V_1^\top A_1V_1)^{-1}V_1^\top
+```
+
+unchanged for the whole trajectory. It performs no later $A_kV_1$ product,
+coarse-matrix update, or coarse-factor update. This arm directly tests whether
+the complete dominant-mode deflation preconditioner can be recycled despite the
+ARD matrix drift.
 “Fresh oracle” instead rebuilds $V_k$ as well as $E_k$. It is an intentionally
 expensive reference showing the benefit available when the coarse space tracks
 the changing eigenspace perfectly or approximately.
 
-For the sketches, the same $\Omega$ is used at every state and by paired fresh
-and recycled arms. For exact `eigs` bases, the random generator is reset before
-each method so paired comparisons receive the same initial random start. These
-controls isolate refresh policy as far as the independent optimizer trajectories
-allow.
+For the sketches, the same $\Omega$ is used at every state and by the fresh,
+basis-recycled, and fully recycled arms. For exact `eigs` bases, the random
+generator is reset before each method so paired comparisons receive the same
+initial random start. These controls isolate refresh policy as far as the
+independent optimizer trajectories allow. `SketchQList` remains configurable,
+but its default is the single value $q=1$; the full-recycle arm is defined only
+for that value.
 
 ## 7. Spectrum diagnostics
 
@@ -410,7 +419,7 @@ download_ccpp                 % one-time download; no-op if data already exists
 out = run_ard_training_benchmark;
 ```
 
-The default experiment is intentionally expensive: ten independent trajectories
+The default experiment is intentionally expensive: seven independent trajectories
 each use 3,000-by-3,000 dense kernels, 30 parameter states, nine PCG right-hand
 sides per state, and fresh-oracle eigenspace builds where applicable.
 
@@ -445,7 +454,7 @@ out = run_ard_training_benchmark( ...
 | `MaxIt` | 10000 | PCG iteration limit |
 | `Rank` | 100 | exact-deflation rank and sketch base rank |
 | `Tau` | 0.5 | deflated coarse eigenvalue |
-| `SketchQList` | `[1 2 3]` | numbers of kernel power applications |
+| `SketchQList` | `1` | kernel power counts; additional values may be requested explicitly |
 | `SketchOversample` | 2 | sketch width multiplier |
 | `AdamRate` | 0.05 | Adam learning rate |
 | `SpectrumCount` | 500 | retained values per absolute spectral tail |
@@ -464,7 +473,7 @@ Results are written to `benchmark_ard_training/`, or
 | output | contents |
 |---|---|
 | `solve_results.csv` | one row per method, state, and target/probe solve: iterations, flags, residuals, and solve time |
-| `training_results.csv` | hyperparameters, gradient, matrix drift, setup components, and completion status per state |
+| `training_results.csv` | hyperparameters, gradient, matrix drift, setup components/rebuild flags, and completion status per state |
 | `summary.csv` | completed states, convergence fraction, total work/time, exact final NLML, RMSE, and final hyperparameters |
 | `run_config.mat`, `run_config.json` | parameters, method registry, data split, initialization, and standardization statistics |
 | `benchmark_results.mat` | consolidated MATLAB result structure, including spectra |

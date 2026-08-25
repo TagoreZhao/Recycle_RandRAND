@@ -18,13 +18,15 @@ for n = 1:4
         r = rank(dS,1e-10*norm(S,'fro'));
         rank_exceeded = rank_exceeded || r>2*st.nC;
     end
-    prev = struct('S',S,'A_bc',st.A_bc,'D',st.D); xr=st.K\st.b; u=xr(1:ctx.nU);
+    [K,b] = st.materialize_kkt();
+    prev = struct('S',S,'A_bc',st.A_bc,'D',st.D); xr=K\b; u=xr(1:ctx.nU);
 end
 assert(rank_exceeded,'No dS exceeded the old rank-2nC border bound.');
 
 cfg = varvisc_schur_make_cfg('disk_static_nu_const',p,[]);
 ctx = varvisc_schur_context_init(cfg,p); u=zeros(ctx.nU,1);
-s1 = varvisc_schur_step_operator(ctx,p.dt,u); xr=s1.K\s1.b; u=xr(1:ctx.nU);
+s1 = varvisc_schur_step_operator(ctx,p.dt,u);
+[K,b] = s1.materialize_kkt(); xr=K\b; u=xr(1:ctx.nU);
 s2 = varvisc_schur_step_operator(ctx,2*p.dt,u);
 assert(isequal(s1.A_bc,s2.A_bc),'Static-control A changed.');
 assert(isequal(s1.D,s2.D),'Static-control D changed.');

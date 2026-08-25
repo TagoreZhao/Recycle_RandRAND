@@ -12,13 +12,18 @@ function [Papply, PsqrtApply] = small_eigenvalue_lift(V, tau)
     assert(isscalar(tau) && tau > 0 && isfinite(tau), ...
         'The lifting tau must be a positive finite scalar.');
 
-    orthogonalityResidual = norm(V'*V-eye(size(V,2)), 'fro');
+    Vt = V';
+    orthogonalityResidual = norm(Vt*V-eye(size(V,2)), 'fro');
     assert(orthogonalityResidual <= 1e-10, ...
         'V must have orthonormal columns (residual %.3e).', ...
         orthogonalityResidual);
 
     inverseTau = 1/tau;
     squareRootWeight = sqrt(1+inverseTau)-1;
-    Papply = @(X) X + inverseTau * V*(V'*X);
-    PsqrtApply = @(X) X + squareRootWeight * V*(V'*X);
+    Papply = @(X) local_lift_apply(X,V,Vt,inverseTau);
+    PsqrtApply = @(X) local_lift_apply(X,V,Vt,squareRootWeight);
+end
+
+function Y = local_lift_apply(X,V,Vt,weight)
+    Y = X + weight*V*(Vt*X);
 end

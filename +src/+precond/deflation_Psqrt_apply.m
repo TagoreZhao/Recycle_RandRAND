@@ -39,8 +39,9 @@ function [Psqrt_apply, E, decE] = deflation_Psqrt_apply(V, A, tau, output_type)
         is_struct = true;
     elseif isnumeric(V)
         Vdense    = V;
+        Vt        = V';
         V_apply   = @(X) V * X;
-        Vt_apply  = @(X) V' * X;
+        Vt_apply  = @(X) Vt * X;
         n_rows    = size(V, 1);
         is_struct = false;
     else
@@ -73,22 +74,24 @@ function [Psqrt_apply, E, decE] = deflation_Psqrt_apply(V, A, tau, output_type)
     decE.V_apply    = V_apply;
     decE.Vt_apply   = Vt_apply;
 
-    % Helper: apply E^{-1/2} to a k-by-m matrix Y
-    apply_E_inv_half = @(Y) U * (inv_sqrt_d .* (decE.Ut * Y));
-
     % Apply P^{1/2}:
     % Psqrt X = X - V(V'X) + sqrt(tau) * V * E^{-1/2} * (V'X)
     sqtau = sqrt(tau);
     if strcmp(output_type, 'handle')
-        Psqrt_apply = @(X) X ...
-            - V_apply(Vt_apply(X)) ...
-            + sqtau * V_apply(apply_E_inv_half(Vt_apply(X)));
+        Psqrt_apply = @(X) local_psqrt_apply( ...
+            X,V_apply,Vt_apply,U,decE.Ut,inv_sqrt_d,sqtau);
     else
         if is_struct
             error(['output_type=''matrix'' is not supported for Vstruct input; ', ...
                    'pass a numeric V, or request the handle form.']);
         end
-        E_inv_half  = U * diag(inv_sqrt_d) * U';
-        Psqrt_apply = eye(n_rows) - V*V' + sqtau * V * E_inv_half * V';
+        E_inv_half  = U*diag(inv_sqrt_d)*decE.Ut;
+        Psqrt_apply = eye(n_rows) - V*Vt + sqtau*V*E_inv_half*Vt;
     end
+end
+
+function Y = local_psqrt_apply(X,Vapply,Vtapply,U,Ut,invSqrtD,sqrtTau)
+    coefficients = Vtapply(X);
+    scaled = U*(invSqrtD.*(Ut*coefficients));
+    Y = X - Vapply(coefficients) + sqrtTau*Vapply(scaled);
 end

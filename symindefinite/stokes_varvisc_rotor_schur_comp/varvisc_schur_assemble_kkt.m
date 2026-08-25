@@ -1,8 +1,7 @@
 function [K, b, C, gvec, nC, nu_e] = varvisc_schur_assemble_kkt(ctx, tcur, u_prev)
 %VARVISC_SCHUR_ASSEMBLE_KKT  Assemble one post-BC variable-viscosity KKT pair.
-%   This mirrors src.stokes.solve_stokes_varvisc and deliberately derives the
-%   Schur blocks by slicing this assembled matrix rather than duplicating BC
-%   elimination algebra.
+%   This exact-reference helper mirrors src.stokes.solve_stokes_varvisc. Normal
+%   Schur solves use varvisc_schur_assemble_blocks and do not call this routine.
 
     import src.stokes.*
 

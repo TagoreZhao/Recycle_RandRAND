@@ -2,47 +2,52 @@ function st = varvisc_schur_step_operator(ctx, tcur, u_prev)
 %VARVISC_SCHUR_STEP_OPERATOR  Build the reduced SPD Schur operator.
 %   A_n and D_n both change with viscosity, so every step rebuilds chol(A_n).
 %   The Schur complement is exposed as a function handle and is materialized
-%   only when ST.to_dense() is explicitly requested.
+%   only when ST.to_dense() is explicitly requested.  The full sparse KKT
+%   matrix is likewise available only through ST.materialize_kkt().
 
-    [K,b,C,gvec,nC,nu_e] = varvisc_schur_assemble_kkt(ctx,tcur,u_prev);
-    nU = ctx.nU; nP = ctx.nP;
-    nSfull = nP + nC;
-    A = (K(1:nU,1:nU) + K(1:nU,1:nU)') / 2;
-    Gt = K(1:nU,nU+1:end);
-    D = -K(nU+1:end,nU+1:end);
-    b1 = b(1:nU);
-    b2 = b(nU+1:end);
+    blk = varvisc_schur_assemble_blocks(ctx,tcur,u_prev);
+    nSfull = ctx.nP + blk.nC;
 
-    dA = decomposition(A, 'chol');
+    dA = decomposition(blk.A,'chol');
     keep = true(nSfull,1);
     keep(ctx.pin_node) = false;
-    GtReduced = Gt(:,keep);
-    DReduced = D(keep,keep);
-    b2Reduced = b2(keep);
+    GtReduced = blk.Gt(:,keep);
+    GReduced = blk.G(keep,:);
+    DReduced = blk.D(keep,keep);
+    b2Reduced = blk.b2(keep);
 
-    st.apply = @(X) local_apply(X,DReduced,GtReduced,dA);
-    st.to_dense = @() local_to_dense(DReduced,GtReduced,dA);
-    st.rhs_S = GtReduced' * (dA \ b1) - b2Reduced;
+    st.apply = @(X) local_apply(X,DReduced,GReduced,GtReduced,dA);
+    st.to_dense = @() local_to_dense(DReduced,GReduced,GtReduced,dA);
+    st.materialize_kkt = @() local_materialize_kkt( ...
+        blk.A,blk.Gt,blk.G,blk.D,blk.b1,blk.b2);
+    st.rhs_S = GReduced*(dA\blk.b1) - b2Reduced;
     st.keep = keep;
     st.recover = @(ykeep) local_recover(ykeep,keep,ctx.pin_node,ctx.pin_val, ...
-        nSfull,b1,Gt,dA);
-    st.K = K; st.b = b; st.C = C; st.gvec = gvec;
-    st.nC = nC; st.nS = nSfull - 1; st.pin_node = ctx.pin_node;
-    st.nu_e = nu_e; st.A_bc = A; st.D = D; st.Gt = Gt;
-    st.D_reduced = DReduced; st.Gt_reduced = GtReduced;
+        nSfull,blk.b1,blk.Gt,dA);
+    st.C = blk.C; st.gvec = blk.gvec;
+    st.nC = blk.nC; st.nS = nSfull - 1; st.pin_node = ctx.pin_node;
+    st.nu_e = blk.nu_e; st.A_bc = blk.A; st.D = blk.D;
+    st.Gt = blk.Gt; st.G = blk.G;
+    st.D_reduced = DReduced;
+    st.Gt_reduced = GtReduced; st.G_reduced = GReduced;
 end
 
-function Y = local_apply(X,D,Gt,dA)
+function Y = local_apply(X,D,G,Gt,dA)
     if size(X,1) ~= size(Gt,2)
         error('varvisc_schur_step_operator:dimensionMismatch', ...
               'Schur input has %d rows; expected %d.',size(X,1),size(Gt,2));
     end
-    Y = D*X + Gt'*(dA\(Gt*X));
+    Y = D*X + G*(dA\(Gt*X));
 end
 
-function S = local_to_dense(D,Gt,dA)
-    S = full(D) + Gt'*(dA\full(Gt));
+function S = local_to_dense(D,G,Gt,dA)
+    S = full(D) + G*(dA\full(Gt));
     S = (S+S')/2;
+end
+
+function [K,b] = local_materialize_kkt(A,Gt,G,D,b1,b2)
+    K = [A, Gt; G, -D];
+    b = [b1; b2];
 end
 
 function x = local_recover(ykeep,keep,pin,pinval,nS,b1,Gt,dA)

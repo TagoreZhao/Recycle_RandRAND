@@ -11,7 +11,7 @@
 %
 %   EXTRACT_H0 = 0.1; EXTRACT_STEP = 2; varvisc_schur_extract_examples
 %
-% The script marches every preceding step with the full KKT reference solve,
+% The script marches every preceding step with an exact dense Schur solve,
 % then writes a .mat containing S, rhs_S, y_ref, eigenvalues, keep, and meta.
 % A matching *_spectrum.png shows every ordered eigenvalue of the reduced SPD
 % Schur complement.  Generated artifacts are gitignored and regenerable.
@@ -79,7 +79,8 @@ u_prev = zeros(ctx.nU, 1);
 for n = 1:EXTRACT_STEP
     tcur = n * params.dt;
     st = varvisc_schur_step_operator(ctx, tcur, u_prev);
-    x_ref = st.K \ st.b;
+    Sstep = st.to_dense();
+    x_ref = st.recover(Sstep\st.rhs_S);
     u_prev = x_ref(1:ctx.nU);
 end
 
@@ -101,8 +102,10 @@ assert(chol_flag == 0, ...
 y_ref = R \ (R' \ rhs_S);
 schur_relres = norm(S*y_ref - rhs_S) / max(norm(rhs_S), eps);
 x_schur = st.recover(y_ref);
-relerr_vs_kkt = norm(x_schur - x_ref) / max(norm(x_ref), eps);
-y_kkt = x_ref(ctx.nU+1:end);
+[Kexact,bexact] = st.materialize_kkt();
+x_kkt = Kexact\bexact;
+relerr_vs_kkt = norm(x_schur - x_kkt) / max(norm(x_kkt), eps);
+y_kkt = x_kkt(ctx.nU+1:end);
 y_kkt = y_kkt(keep);
 y_relerr_vs_kkt = norm(y_ref - y_kkt) / max(norm(y_kkt), eps);
 assert(schur_relres < 1e-10, ...

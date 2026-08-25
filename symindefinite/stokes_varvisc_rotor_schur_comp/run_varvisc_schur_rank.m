@@ -18,7 +18,7 @@ for n = 1:nsteps
             'relative_change',norm(dS,'fro')/norm(S,'fro'), ...
             'pressure_block_energy',norm(dSpp,'fro')/norm(dS,'fro'));
     end
-    Sprev = S; xr = st.K\st.b; u = xr(1:ctx.nU);
+    Sprev = S; xr = st.recover(S\st.rhs_S); u = xr(1:ctx.nU);
 end
 T = struct2table([rows{:}]);
 assert(any(T.rank_dS>T.old_border_bound), ...

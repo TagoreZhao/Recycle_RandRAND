@@ -16,6 +16,7 @@ function ctx = varvisc_schur_context_init(cfg, params)
     ctx.blk = assemble_stokes_blocks(msh);
     ctx.Mdt = ctx.blk.M2 / ctx.dt;
     ctx.Bdiv = ctx.blk.B;
+    ctx.BdivT = ctx.Bdiv';
     ctx.TR = triangulation(msh.t, msh.p);
     ctx.velbc_fun = cfg.velbc_fun;
     ctx.motion_fun = cfg.motion_fun;

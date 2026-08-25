@@ -71,12 +71,11 @@ points, and $g_n$ contains their prescribed rigid velocities. The velocity
 right-hand side carries the previous state,
 $b_{u,n}=M_2u^{n-1}/\Delta t$, plus an optional body-force term.
 
-Velocity Dirichlet values and one pressure value are imposed by
-`apply_dirichlet_sym`: known values are lifted to the right-hand side and both
-the corresponding rows and columns are zeroed before a unit diagonal is
-inserted. Therefore the matrix actually used below is still symmetric. The
-Schur blocks are obtained by slicing this already-eliminated KKT matrix; the
-boundary algebra is not independently reimplemented.
+Velocity Dirichlet values and one pressure value are imposed directly on the
+sparse blocks: known columns are lifted to the block right-hand sides, the
+corresponding rows and columns are zeroed, and unit constrained diagonals are
+inserted. This is algebraically identical to `apply_dirichlet_sym`, but avoids
+assembling the enclosing KKT matrix during ordinary Schur solves.
 
 ## 2. Constructing the Schur complement
 
@@ -147,9 +146,14 @@ u=A_n^{-1}(b_1-G_n^\mathsf{T}y).
 
 ```matlab
 dA = decomposition(A, 'chol');
-Sapply = @(X) Dred*X + Gtred'*(dA\(Gtred*X));
-rhs_S = Gtred'*(dA\b1) - b2red;
+Sapply = @(X) Dred*X + Gred*(dA\(Gtred*X));
+rhs_S = Gred*(dA\b1) - b2red;
 ```
+
+Both sparse orientations `Gred` and `Gtred` are stored when the step is built.
+The operator handle therefore performs only sparse matrix products and the
+required velocity-block solve; it never transposes a large matrix while PCG or
+a randomized basis builder is iterating.
 
 `st.apply(X)` supports both vectors and block matrices, so PCG, Gaussian
 sketches, Lanczos, and coarse Galerkin products all use the same matrix-free
@@ -448,6 +452,14 @@ rank, and extraction scripts always request dense matrices because exact dense
 quantities are their purpose. `Astat.dense_materialized_step` records every
 time step at which the main sequence requested a dense matrix.
 
+Normal time stepping also avoids the former per-step `K\b` factorization. A
+tighter-tolerance Schur PCG solve supplies the reference solution and advances
+the velocity state. `REFERENCE_TOL` and `REFERENCE_MAXIT` control that solve,
+and its iterations, flag, and residual are recorded. Setting
+`EXACT_REFERENCE_DIAGNOSTICS=true` explicitly materializes the sparse KKT pair
+and runs `K\b` for validation; `Astat.kkt_materialized_step` records those
+requests. Exact-only fields remain `NaN` when that option is disabled.
+
 Setting `PLOT_EXTREME_EIGENVALUES=true` enables two additional matrix-free
 Ritz estimates for every configured linear system and time step. The estimates
 come from each symmetric two-sided preconditioned operator, so they represent
@@ -532,7 +544,7 @@ spectra, and `recommended_config.json` records the selected existing-knob
 settings. This is the best tested configuration for the hard-drift case, not a
 claim of a global optimum.
 
-`varvisc_schur_extract_examples` marches the full KKT sequence through the
+`varvisc_schur_extract_examples` marches exact dense Schur solves through the
 requested step and writes one
 `varvisc_schur_example_<case>_h<h0>_step<step>.mat` artifact. It contains the
 reduced system `S*y_ref = rhs_S`, the complete ordered `eigenvalues`, the
@@ -581,14 +593,16 @@ The test suite checks the defining Schur properties:
 - `test_varvisc_schur_adaptive_tuning` exercises the two-stage workflow and
   its recommendation artifacts in smoke mode.
 
-The construction is split between three benchmark-local helpers:
+The construction is split between four benchmark-local helpers:
 
-- `varvisc_schur_assemble_kkt.m` assembles the parent KKT pair and applies
-  symmetric velocity and pressure boundary elimination;
+- `varvisc_schur_assemble_blocks.m` directly assembles the post-boundary sparse
+  blocks and stores both orientations of the coupling;
+- `varvisc_schur_assemble_kkt.m` retains the monolithic exact-reference
+  assembly used by cross-checks;
 - `varvisc_schur_context_init.m` stores only time-independent mesh and assembly
   data; and
-- `varvisc_schur_step_operator.m` slices the KKT blocks, removes the pin,
-  exposes `apply` and `to_dense` handles, and defines full-solution recovery.
+- `varvisc_schur_step_operator.m` removes the pin, exposes `apply`, `to_dense`,
+  and lazy `materialize_kkt` handles, and defines full-solution recovery.
 
 All benchmark-local helpers use the `varvisc_schur` prefix to avoid name
 collisions with the KKT and constant-viscosity Schur benchmarks.

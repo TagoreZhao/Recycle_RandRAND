@@ -35,7 +35,7 @@ for hi = 1:numel(h0_list)
                 end
             end
         end
-        xr = st.K\st.b; u = xr(1:ctx.nU);
+        xr = st.recover(S\st.rhs_S); u = xr(1:ctx.nU);
     end
 end
 Tsummary = struct2table([rows{:}]);

@@ -7,7 +7,7 @@ cfg = varvisc_schur_make_cfg('bar_rotating_nu_orbiting',p,[]);
 ctx = varvisc_schur_context_init(cfg,p);
 st = varvisc_schur_step_operator(ctx,p.dt,zeros(ctx.nU,1));
 dA = decomposition(st.A_bc,'chol');
-Sfull = full(st.D)+st.Gt'*(dA\full(st.Gt)); Sfull=(Sfull+Sfull')/2;
+Sfull = full(st.D)+st.G*(dA\full(st.Gt)); Sfull=(Sfull+Sfull')/2;
 pin = ctx.pin_node; row = Sfull(pin,:); row(pin)=0;
 assert(abs(Sfull(pin,pin)+1)<1e-12,'Pinned diagonal is not -1.');
 assert(norm(row,inf)<1e-12,'Pinned direction is coupled.');

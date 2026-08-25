@@ -26,6 +26,22 @@ function test_ard_training_components
     assert(max(abs(eig(split0, 'vector') - 1)) < 1e-11, ...
            'Initial recycled-exact split spectrum is not identity.');
 
+    % A fully recycled deflation handle must retain the state-1 coarse inverse
+    % after the system changes.  Rebuilding with A2 should produce a different
+    % action for a generic coarse space.
+    V = orth(randn(n, 4)); tauDefl = 0.5;
+    [P1, E1] = src.precond.deflation_P_apply(V, A, tauDefl);
+    frozenAtBuild = P1(testRhs);
+    A2 = A + diag(linspace(0.02, 0.2, n));
+    frozenAfterChange = P1(testRhs);
+    [P2, E2] = src.precond.deflation_P_apply(V, A2, tauDefl);
+    assert(norm(frozenAfterChange - frozenAtBuild, 'fro') < 10 * eps, ...
+           'Fully recycled deflation changed without being rebuilt.');
+    assert(norm(E2 - E1, 'fro') / norm(E1, 'fro') > 1e-4, ...
+           'Test matrix change did not alter the coarse block.');
+    assert(norm(P2(testRhs) - frozenAtBuild, 'fro') / norm(frozenAtBuild, 'fro') > 1e-6, ...
+           'Refreshed and fully recycled deflation actions unexpectedly agree.');
+
     % Scaled coordinate probes make the Hutchinson average exactly equal to
     % the trace: (1/n) sum_i (sqrt(n)e_i)' B (sqrt(n)e_i) = trace(B).
     Z = sqrt(n) * eye(n);

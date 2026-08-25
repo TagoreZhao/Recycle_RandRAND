@@ -2,11 +2,13 @@ function params = make_varvisc_schur_params()
 %MAKE_VARVISC_SCHUR_PARAMS  Defaults for the variable-viscosity Schur study.
 
     params = struct();
-    params.h0 = 0.03;
+    params.h0 = 0.05;
     params.dt = 0.02;
     params.Tstep = 61;
     params.SOLVER_TOL = 1e-8;
     params.SOLVER_MAXIT = 1e5;
+    params.REFERENCE_TOL = 1e-10;
+    params.REFERENCE_MAXIT = params.SOLVER_MAXIT;
 
     params.sm_eig = 20;
     params.lg_eig = 100;
@@ -29,6 +31,7 @@ function params = make_varvisc_schur_params()
     params.COMPUTE_SPECTRUM = false;
     params.PLOT_EXTREME_EIGENVALUES = false;
     params.EXACT_DENSE_DIAGNOSTICS = false;
+    params.EXACT_REFERENCE_DIAGNOSTICS = false;
     params.SPECTRAL_RITZ_TOL = 1e-10;
     params.SPECTRAL_RITZ_MAXIT = 10000;
     params.standalone_variants = [ ...
