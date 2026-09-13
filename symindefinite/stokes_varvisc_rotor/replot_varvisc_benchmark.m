@@ -16,6 +16,7 @@ function replot_varvisc_benchmark(results_root, varargin)
 %   CSVs from the same data (identical content; opt-in so a replot cannot be
 %   blamed for a data change).  'DryRun' lists what would be overwritten and
 %   returns.
+%   Step-indexed comparisons also get _linear.png companions.
 %
 %   See also: varvisc_load_benchmark_stats, varvisc_write_case_figures,
 %             run_varvisc_benchmark.
@@ -63,10 +64,14 @@ function replot_varvisc_benchmark(results_root, varargin)
     end
 
     ivt_dir = fullfile(results_root, 'iteration_vs_timestep');
+    linear_opts = opts; linear_opts.yscale = 'linear';
     for k = 1:numel(all_stats)
         varvisc_write_iteration_vs_timestep(ivt_dir, all_stats{k}, opts);
+        varvisc_write_iteration_vs_timestep(ivt_dir, all_stats{k}, linear_opts, '_linear');
     end
     varvisc_write_all_cases_comparison(fullfile(results_root, 'summary_plots'), all_stats, opts);
+    varvisc_write_all_cases_comparison(fullfile(results_root, 'summary_plots'), ...
+        all_stats, linear_opts, 'all_cases_comparison_linear.png');
 
     if any(strcmp(cfg.solver_keys,'two_level_aug_gaussian'))
         varvisc_plot_augmentation(results_root);
@@ -93,9 +98,13 @@ function list_targets(results_root, all_stats, cfg, rewriteCsv)
         end
         fprintf('    %s\n', fullfile(results_root, 'iteration_vs_timestep', ...
             [st.case_name '.png']));
+        fprintf('    %s\n', fullfile(results_root, 'iteration_vs_timestep', ...
+            [st.case_name '_linear.png']));
     end
     fprintf('    %s\n', fullfile(results_root, 'summary_plots', ...
         'all_cases_comparison.png'));
+    fprintf('    %s\n', fullfile(results_root, 'summary_plots', ...
+        'all_cases_comparison_linear.png'));
     if any(strcmp(cfg.solver_keys,'two_level_aug_gaussian'))
         fprintf('    Each case/augmentation_plots/*.png (from saved diagnostic data)\n');
     end

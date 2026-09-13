@@ -39,6 +39,9 @@ MINRES; they exclude the common inverse-power sketch.
 Outputs are written to `benchmark_varvisc_augmented/`:
 
 - `all_results.csv` and the existing comparison graphs include the new arm.
+- `iteration_vs_timestep/*_linear.png` and
+  `summary_plots/all_cases_comparison_linear.png` provide linear-axis
+  iteration-versus-step views alongside the logarithmic versions.
 - `augmentation_results.csv` contains per-step Gaussian/sweep measurements;
   `augmentation_summary.csv` aggregates iteration savings and accuracy.
 - `augmentation_report.md` summarizes measured findings and links the plots.

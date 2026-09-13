@@ -196,10 +196,14 @@ end
 % Root collections.
 ivt_dir = fullfile(results_root, 'iteration_vs_timestep');
 if ~exist(ivt_dir, 'dir'), mkdir(ivt_dir); end
+linear_opts = figopts; linear_opts.yscale = 'linear';
 for k = 1:num_cases
     varvisc_write_iteration_vs_timestep(ivt_dir, all_stats{k}, figopts);
+    varvisc_write_iteration_vs_timestep(ivt_dir, all_stats{k}, linear_opts, '_linear');
 end
 varvisc_write_all_cases_comparison(fullfile(results_root, 'summary_plots'), all_stats, figopts);
+varvisc_write_all_cases_comparison(fullfile(results_root, 'summary_plots'), ...
+    all_stats, linear_opts, 'all_cases_comparison_linear.png');
 write_speedup_summary(results_root, all_stats, geometry);
 
 % --- run config (strip non-serializable solver handles; keep keys/labels) ---

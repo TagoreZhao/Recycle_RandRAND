@@ -49,9 +49,11 @@ function varvisc_write_augmentation_report(results_root,cfg,T,summary)
         'is the projection onto [V,W]^perp, not the full two-level preconditioned ' ...
         'MINRES operator.\n\n'],cfg.params.AUGMENT_PROBE_DIM);
     fprintf(fid,'## Inspection figures\n\n');
+    fprintf(fid,'[All solvers, linear iteration-vs-step comparison](summary_plots/all_cases_comparison_linear.png).\n\n');
     for c=1:numel(cfg.case_names)
         name=cfg.case_names{c};
         fprintf(fid,'- **%s:** [iterations](%s/augmentation_plots/gaussian_comparison.png), ',name,name);
+        fprintf(fid,'[all solvers, linear vs step](iteration_vs_timestep/%s_linear.png), ',name);
         fprintf(fid,'[subspaces](%s/augmentation_plots/subspace_diagnostics.png), ',name);
         fprintf(fid,'[accuracy](%s/augmentation_plots/paired_accuracy.png), ',name);
         fprintf(fid,'[spectra](%s/augmentation_plots/projected_spectra.png).\n',name);

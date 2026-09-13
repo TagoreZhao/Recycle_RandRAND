@@ -48,6 +48,13 @@ function varvisc_write_all_cases_comparison(out_dir, all_stats, opts, output_nam
         [hk, lk] = varvisc_plot_solver_curves(ax, (1:ns)', st, '', opts);
         if k == 1, h = hk; legLabels = lk; end
         ylim(ax, gylim);
+        if strcmpi(opts.yscale, 'linear')
+            % Match the grid across panels as well as their limits.
+            raw_step = max(1, gylim(2) / 8);
+            steps = [1 2 5 10] * 10^floor(log10(raw_step));
+            tick_step = steps(find(steps >= raw_step, 1));
+            yticks(ax, 0:tick_step:gylim(2));
+        end
         xlim(ax, gxlim);
         xticks(ax, gxtick);
         ylabel(ax, '');                       % the layout owns the labels
