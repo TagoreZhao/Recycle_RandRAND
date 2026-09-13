@@ -1,4 +1,4 @@
-function [x, fl, rr, it] = two_level_split_solve(K, b, tol, mit, P, V, tau)
+function [x, fl, rr, it, info] = two_level_split_solve(K, b, tol, mit, P, V, tau)
 %TWO_LEVEL_SPLIT_SOLVE  Solve K x = b by MINRES on the split (smoothed) operator
 % Ahat = C^-1 K C^-T with an optional deflation coarse operator as the inner
 % preconditioner, then recover x = C^-T y.  This is the standard two-level
@@ -26,23 +26,50 @@ function [x, fl, rr, it] = two_level_split_solve(K, b, tol, mit, P, V, tau)
 %   tau      deflation coarse-correction weight (multiplicative), e.g. 1.
 %
 % Outputs match MINRES: solution x, flag fl, relative residual rr (of the SPLIT
-% operator), iteration count it.
+% operator), iteration count it. Optional INFO contains timings, counted
+% operator columns, coarse eigenvalues, AV and MATLAB's residual history.
+% Four-output callers retain the original numerical path.
 %
 % See also: build_deflation_V, deflation_Psqrt_apply, make_ildl_precond.
 
     import src.precond.*
 
-    Afun = @(y) P.applyCinv(K * P.applyCtinv(y));   % Ahat = C^-1 K C^-T
+    measured = nargout > 4;
+    operator_columns = 0;
+    AV = [];
+    d = [];
+    Afun = @apply_split;
+    setup_timer = tic;
     btil = P.applyCinv(b);                          % C^-1 b
 
-    if isempty(V)
-        [y, fl, rr, it] = minres(Afun, btil, tol, mit);                 % ILDL only
-    else
-        Ahat2 = @(z) Afun(Afun(z));                                     % Ahat^2 (SPD)
-        Pdef  = deflation_Psqrt_apply(V, Ahat2, tau, 'handle');         % (I-VV')+sqrt(tau) V (V'Ahat^2V)^-1/2 V' ~ |Ahat|^-1
-        %Compute 5 power iteration of Ahat2 and divided 2 
-        [y, fl, rr, it] = minres(Afun, btil, tol, mit, Pdef);          % two-level L^-T P L^-1
+    Pdef = [];
+    if ~isempty(V)
+        if measured
+            [Pdef, ~, decE] = deflation_Psqrt_apply(V, @apply_squared, tau, 'handle');
+            d = decE.d;
+        else
+            Pdef = deflation_Psqrt_apply(V, @(z) Afun(Afun(z)), tau, 'handle');
+        end
+    end
+    setup_s = toc(setup_timer);
+    setup_columns = operator_columns;
+    solve_timer = tic;
+    [y, fl, rr, it, rv] = minres(Afun, btil, tol, mit, Pdef);
+    x = P.applyCtinv(y);                            % recover x = C^-T y
+    solve_s = toc(solve_timer);
+    if measured
+        info = struct('coarse_setup_s', setup_s, 'minres_s', solve_s, ...
+            'coarse_operator_columns', setup_columns, ...
+            'minres_operator_columns', operator_columns - setup_columns, ...
+            'coarse_eigenvalues', d, 'AV', AV, 'resvec', rv);
     end
 
-    x = P.applyCtinv(y);                            % recover x = C^-T y
+    function z = apply_split(y)
+        if measured, operator_columns = operator_columns + size(y,2); end
+        z = P.applyCinv(K * P.applyCtinv(y));
+    end
+    function z = apply_squared(y)
+        AV = Afun(y);
+        z = Afun(AV);
+    end
 end

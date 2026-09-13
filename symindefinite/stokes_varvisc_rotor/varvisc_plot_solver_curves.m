@@ -41,6 +41,9 @@ function [h, legLabels] = varvisc_plot_solver_curves(ax, xax, stats, xlab, opts)
             'MarkerSize',    sty(s).markersize, ...
             'MarkerIndices', idx);
         legLabels{s} = [varvisc_solver_short_label(keys{s}) tags{s}];
+        if strcmp(keys{s},'two_level_aug_gaussian')
+            legLabels{s} = [stats.solver_labels{s} tags{s}];
+        end
     end
     hold(ax, 'off');
 

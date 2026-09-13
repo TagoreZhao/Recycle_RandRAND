@@ -32,6 +32,7 @@ function s = varvisc_solver_short_label(key)
         case 'gmres_exact_inv_frozen', s = 'GMRES: exact K_1^{-1}';
         case 'two_level_sjlt',       s = '2-level: sjlt V';
         case 'two_level_gaussian',   s = '2-level: gaussian V';
+        case 'two_level_aug_gaussian', s = 'Gaussian V + Arnoldi';
         case 'two_level_polynomial', s = '2-level: polynomial V';
         case 'two_level_exact',      s = '2-level: exact V';
         case 'two_level_exact_fixed_tau', s = 'stale rank-20 V: fixed tau';

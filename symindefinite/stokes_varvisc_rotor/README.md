@@ -1,5 +1,96 @@
 # Variable-viscosity Stokes immersed rotor
 
+## Gaussian basis plus projected Arnoldi
+
+Run the additive augmentation experiment from the repository root:
+
+```matlab
+addpath('symindefinite/stokes_varvisc_rotor');
+maxNumCompThreads(4);
+test_varvisc_projected_arnoldi;
+run_varvisc_augmented_benchmark('full');
+```
+
+The full run matches the retained benchmark's mesh (`h0=0.05`), three cases,
+60 solves per case, `dt=0.02`, and MINRES tolerance `1e-8`. Every randomized
+sketch uses `sm_eig=500`, oversampling 2, and two power rounds. Gaussian and
+SJLT keep all 1,000 sketch columns; the E-sketch retains its existing
+numerical-rank handling. Deterministic methods keep their existing settings.
+The original no-argument `run_varvisc_benchmark` remains available with its
+existing defaults; augmentation is enabled by the new driver.
+
+Only Gaussian receives augmentation. Its frozen physical basis is transported
+into the current ILDL coordinates, where
+`Ahat(y) = C_i^{-1} K_i C_i^{-T} y`. At each timestep, two-pass augmented
+Arnoldi constructs 20 vectors for `(I-V*V') Ahat (I-V*V')`, starting from
+`(I-V*V') C_i^{-1} b_i`. MINRES uses `[V,W]` in the existing squared-operator
+coarse correction, with `tau=0.5`. All 1,000 columns of V remain: the target
+dimension is **1,020**, not 1,000. W is rebuilt each step and is not recycled.
+Early breakdown retains fewer vectors and is recorded without padding.
+
+The rotating-bar case also tests `m=10,40`, sharing exactly the same live
+Gaussian basis, factor, and RHS as `m=0,20`. This is an additive-dimension
+sweep: totals are 1,000, 1,010, 1,020, and 1,040. The comparison focuses on
+iterations, accuracy, spectra, and subspace quality. Raw timing telemetry is
+retained with the engine's existing measurements, but is not compared in the
+figures or summary. Operator-column counts cover Arnoldi, coarse setup, and
+MINRES; they exclude the common inverse-power sketch.
+
+Outputs are written to `benchmark_varvisc_augmented/`:
+
+- `all_results.csv` and the existing comparison graphs include the new arm.
+- `augmentation_results.csv` contains per-step Gaussian/sweep measurements;
+  `augmentation_summary.csv` aggregates iteration savings and accuracy.
+- `augmentation_report.md` summarizes measured findings and links the plots.
+- `augmentation_validation.csv` counts convergence, physical-residual,
+  solution-error, and augmentation-shortfall cases.
+- Each case's `augmentation_plots/` contains paired iteration,
+  accuracy, subspace, spectrum, and residual-history figures. The rotating-bar
+  case additionally has `dimension_sweep.png`.
+- `diagnostics/` retains small per-step MAT records and spectral CSV/MAT files;
+  `snapshots/` retains K, b, C, V, W and the Arnoldi relation at steps
+  1, 15, 30, 45, and 60. `solver_stats.mat` checkpoints each completed case.
+
+The spectral inspection uses independent 200-vector projected Arnoldi probes
+before and after augmentation. The separate random stream does not affect
+solver sketches. Values are Ritz estimates, not a complete eigendecomposition.
+Filled markers satisfy `||Aorth*z-theta*z|| / (rho+abs(theta)) <= 1e-6`,
+where `rho=max(abs(Ritz values))` is an estimated scale. Forced zeros on the
+deflated space are counted separately; genuine small values in its complement
+are retained. A 20-vector forward Krylov space need not resolve the eigenvalues
+nearest zero. The residual-history plots show MATLAB's reported history,
+normalized by its initial value; final physical residuals are reported
+separately because split-system convergence does not imply the same physical
+residual tolerance.
+The after-augmentation spectrum uses the projector onto `[V,W]`'s orthogonal
+complement; it is a subspace inspection, not the spectrum of the complete
+two-level preconditioned MINRES operator.
+
+```matlab
+% Small integration check; h=.16, Gaussian rank 16, first three physical steps.
+run_varvisc_augmented_benchmark('smoke');
+% Replot saved evidence without solving or rerunning spectral probes.
+replot_varvisc_benchmark('benchmark_varvisc_augmented');
+% Rebuild tidy tables and spectral probes explicitly when needed.
+varvisc_analyze_augmentation('symindefinite/stokes_varvisc_rotor/benchmark_varvisc_augmented');
+```
+
+Completed full-run cases are checkpointed and reused on subsequent calls.
+For execution in separate MATLAB processes, run
+`run_varvisc_augmented_benchmark('full',1)`, then indices 2 and 3, and finally
+`run_varvisc_augmented_benchmark('finalize')`. Separate case invocations write
+only their own case directory. Each case resets to the same seed-1 RNG state
+after mesh construction; `run_config.mat` retains that state. This makes case
+results independent of execution order. Use a fresh output directory when
+changing experimental parameters rather than reusing prior checkpoints.
+
+The smoke run preserves the full run's physical motion period and writes to
+`benchmark_varvisc_augmented_smoke/`. Its smaller basis and mesh are only an
+integration check. `validate_varvisc_augmentation_results` checks dimensions,
+orthogonality, recurrence errors, row coverage, and positive coarse spectra.
+Accuracy failures remain visible in the saved results; they are not filtered
+from the comparison or repaired by changing stopping tolerances.
+
 This benchmark is the variable-viscosity sibling of
 [`stokes_immersed_rotor`](../stokes_immersed_rotor/README.md). It solves
 backward-Euler, incompressible Stokes flow in the channel

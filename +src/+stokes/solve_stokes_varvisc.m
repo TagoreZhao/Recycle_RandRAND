@@ -135,6 +135,8 @@ function Astat = solve_stokes_varvisc(cfg, params, save_dir)
     pc = struct('nU', nU, 'nP', nP, 'nC', 0, 'K', [], 'step', 0, ...
                 'Au_bc', [], 'dP', [], 'nu_e', []);
     pc.cache = containers.Map('KeyType', 'char', 'ValueType', 'any');
+    pc.output_dir = save_dir;
+    pc.case_name = getfield_default(cfg, 'case_name', 'stokes_varvisc');
 
     nsteps = Tstep - 1;
     Z = @(a, b) sparse(a, b);
@@ -296,6 +298,16 @@ function Astat = solve_stokes_varvisc(cfg, params, save_dir)
             Astat.solver_its.(k)(n)    = it_s;
             Astat.solver_err.(k)(n)    = norm(x_s - x_ref) / max(norm(x_ref), eps);
             Astat.solver_time.(k)(n)   = elapsed_s;
+            % Optional benchmark-local diagnostics run OUTSIDE solver timing.
+            % The callback owns non-scalar sidecars; existing scalar telemetry
+            % and registries without a callback retain their original contract.
+            if isfield(s_entry, 'diagnose') && ~isempty(s_entry.diagnose)
+                result = struct('x',x_s,'x_ref',x_ref,'flag',fl_s, ...
+                    'relres',rr_s,'iters',it_s, ...
+                    'true_relres',Astat.solver_true_relres.(k)(n), ...
+                    'err',Astat.solver_err.(k)(n));
+                info_s = s_entry.diagnose(K,b,pc,info_s,result);
+            end
             Astat.solver_info.(k) = record_solver_info( ...
                 Astat.solver_info.(k), info_s, n, nsteps);
             it_last = it_s; rr_last = rr_s; err_last = Astat.solver_err.(k)(n);

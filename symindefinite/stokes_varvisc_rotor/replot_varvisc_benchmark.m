@@ -68,6 +68,9 @@ function replot_varvisc_benchmark(results_root, varargin)
     end
     varvisc_write_all_cases_comparison(fullfile(results_root, 'summary_plots'), all_stats, opts);
 
+    if any(strcmp(cfg.solver_keys,'two_level_aug_gaussian'))
+        varvisc_plot_augmentation(results_root);
+    end
     fprintf('[replot_varvisc_benchmark] done.\n');
 end
 
@@ -93,4 +96,7 @@ function list_targets(results_root, all_stats, cfg, rewriteCsv)
     end
     fprintf('    %s\n', fullfile(results_root, 'summary_plots', ...
         'all_cases_comparison.png'));
+    if any(strcmp(cfg.solver_keys,'two_level_aug_gaussian'))
+        fprintf('    Each case/augmentation_plots/*.png (from saved diagnostic data)\n');
+    end
 end

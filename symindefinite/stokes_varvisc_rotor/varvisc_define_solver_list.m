@@ -9,7 +9,8 @@ function solvers = varvisc_define_solver_list(params)
 %   the moving high-contrast viscosity field changes every nonzero of the fluid
 %   block every step, so nothing here can lean on the parent benchmark's
 %   K_n - K_1 = rank-2nC structure.  The Krylov-recycling arm of the parent
-%   registry is intentionally absent.
+%   registry is replaced here by optional current-operator projected Arnoldi
+%   augmentation (AUGMENT_ENABLED), using the frozen Gaussian physical basis.
 %
 %   Returns a cell array of solver structs.  Each per-step KKT system is
 %   SYMMETRIC INDEFINITE and is solved with MINRES -- except the one GMRES arm
@@ -137,6 +138,12 @@ function solvers = varvisc_define_solver_list(params)
         'ildl_mode',  DEFL.ildl_mode, ...
         'droptol',    DEFL.droptol);
     ESKETCH_K = round(ESK.oversample * ESK.sm_eig);
+    AUG = DEFL;
+    AUG.enabled = getdef(params, 'AUGMENT_ENABLED', false);
+    AUG.m = getdef(params, 'AUGMENT_M', 20);
+    AUG.snapshots = getdef(params, 'AUGMENT_SNAPSHOTS', [1 15 30 45 60]);
+    AUG.sweep = getdef(params, 'AUGMENT_SWEEP', [10 40]);
+    AUG.diagnostics = getdef(params, 'AUGMENT_DIAGNOSTICS', true);
 
     solvers = {};
 
@@ -236,6 +243,16 @@ function solvers = varvisc_define_solver_list(params)
             'build', [], ...
             'solve', @(K,b,tol,mit,pc) ...
                      tl_solve(K, b, tol, mit, pc, meth, opts, R_ildl, R_deflat, R_dinv)); %#ok<AGROW>
+        if AUG.enabled && strcmp(meth, 'gaussian')
+            base_aug = AUG; base_aug.m = 0; base_aug.sweep = [];
+            solvers{end}.returns_info = true;
+            solvers{end}.solve = @(K,b,tol,mit,pc) gaussian_aug_solve( ...
+                K,b,tol,mit,pc,base_aug,R_ildl,R_deflat,R_dinv);
+            if AUG.diagnostics
+                solvers{end}.diagnose = @(K,b,pc,info,result) ...
+                    varvisc_diagnose_augmentation(K,b,pc,info,result,base_aug);
+            end
+        end
     end
 
     % GMRES on the EXACT SIGNED inverse of the step-1 KKT, frozen (own cadence).
@@ -274,12 +291,46 @@ function solvers = varvisc_define_solver_list(params)
         'solve', @(K,b,tol,mit,pc) ...
                  tl_solve_esketch(K, b, tol, mit, pc, ESK, R_ildl, R_esk));
 
+    if AUG.enabled
+        entry = struct('key', 'two_level_aug_gaussian', ...
+            'label', sprintf('Gaussian %d + Arnoldi %d', ESKETCH_K, AUG.m), ...
+            'build', [], 'returns_info', true, ...
+            'solve', @(K,b,tol,mit,pc) gaussian_aug_solve( ...
+                K,b,tol,mit,pc,AUG,R_ildl,R_deflat,R_dinv));
+        if AUG.diagnostics
+            entry.diagnose = @(K,b,pc,info,result) ...
+                varvisc_diagnose_augmentation(K,b,pc,info,result,AUG);
+        end
+        solvers{end+1} = entry;
+    end
+
     solvers = solvers(:);
 end
 
 %==========================================================================
 %  Solve / build closures
 %==========================================================================
+function [x,fl,rr,it,info] = gaussian_aug_solve(K,b,tol,mit,pc,opts,Ri,Rv,Rd)
+    [P,V] = two_level_parts(K,pc,'gaussian',opts,Ri,Rv,Rd);
+    basis = pc.cache('V_gaussian');
+    shared = struct('factor_setup_s', cache_step_seconds(pc, ['ildl_' opts.ildl_mode]) ...
+        + cache_step_seconds(pc, 'dinv'), 'base_setup_s', basis.cost_s, ...
+        'basis_built_step', basis.step);
+    [x,fl,rr,it,info] = varvisc_gaussian_augmented_solve( ...
+        K,b,tol,mit,P,V,opts.m,opts.tau,shared);
+    info.details.P = P;
+    info.details.tol = tol;
+    info.details.maxit = mit;
+end
+
+function seconds = cache_step_seconds(pc, key)
+    seconds = 0;
+    if isKey(pc.cache, key)
+        e = pc.cache(key);
+        if e.step == pc.step, seconds = e.seconds; end
+    end
+end
+
 function Papply = blockjac_build(pc, refresh, key, freeze_dP)
 %BLOCKJAC_BUILD  Block-Jacobi apply at the current (or frozen) viscosity state.
 % The velocity ichol factor is cached under KEY and rebuilt on its own cadence;
@@ -505,9 +556,10 @@ function V = cached_basis(pc, key, refresh, K, P, coordinate_suffix, buildFn)
     end
 
     if rebuild
+        basis_timer = tic;
         V = buildFn();                                  % CURRENT-step hat coords
         c(key) = struct('step',  pc.step, 'U', P.applyCtinv(V), ...
-                        'hstep', pc.step, 'V', V);
+                        'hstep', pc.step, 'V', V, 'cost_s', toc(basis_timer));
         return;
     end
 
@@ -516,6 +568,7 @@ function V = cached_basis(pc, key, refresh, K, P, coordinate_suffix, buildFn)
         return;
     end
 
+    transport_timer = tic;
     [V, info] = transport_V( ...
         e.U, P, current_C(pc, P, coordinate_suffix));    % orth(C_n^T U)
     if info.rank_drop > 0
@@ -528,6 +581,7 @@ function V = cached_basis(pc, key, refresh, K, P, coordinate_suffix, buildFn)
     end
     e.hstep = pc.step;
     e.V     = V;
+    e.cost_s = toc(transport_timer);
     c(key)  = e;
 end
 
@@ -577,8 +631,9 @@ function v = cached(pc, key, refresh, buildFn, isValidFn)
     if nargin < 5, isValidFn = []; end
     c = pc.cache;
     if ~isKey(c, key)
+        build_timer = tic;
         v = buildFn();
-        c(key) = struct('step', pc.step, 'val', v);
+        c(key) = struct('step', pc.step, 'val', v, 'seconds', toc(build_timer));
         return;
     end
     e = c(key);
@@ -592,8 +647,9 @@ function v = cached(pc, key, refresh, buildFn, isValidFn)
                  'frozen factor.'], pc.step, key);
     end
     if stale || (e.step ~= pc.step && mod(pc.step - 1, refresh) == 0)
+        build_timer = tic;
         v = buildFn();
-        c(key) = struct('step', pc.step, 'val', v);
+        c(key) = struct('step', pc.step, 'val', v, 'seconds', toc(build_timer));
     else
         v = e.val;
     end

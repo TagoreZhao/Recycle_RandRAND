@@ -23,8 +23,8 @@
 % step 1 frozen for the whole sequence, the two-level deflation family
 % (L^-T P L^-1 with sjlt / gaussian / polynomial / exact coarse spaces), one
 % GMRES arm on the frozen exact signed inverse, and the low-rank
-% K_1^{-1}(K_n-K_1) sketch variant.  There is NO Krylov-subspace-recycling
-% arm in this benchmark.  Sketch parameters are UNIFIED: every randomized
+% K_1^{-1}(K_n-K_1) sketch variant. AUGMENT_ENABLED adds current-operator
+% projected Arnoldi vectors to the Gaussian basis. Sketch parameters are UNIFIED: every randomized
 % sketch (gaussian/sjlt deflation V and the low-rank D-sketch) draws
 % SKETCH_OVERSAMPLE * DEFLAT_SM_EIG columns, runs DEFLAT_Q power rounds and
 % keeps all columns (orthonormalize-only, no truncation).
@@ -52,6 +52,14 @@ import src.stokes.*
 rng(1);
 
 params = varvisc_default_benchmark_params();
+% Optional explicit overrides support the additive-Arnoldi experiment while
+% preserving the original script entry point and its historical defaults.
+if exist('VARVISC_OVERRIDES','var') && isstruct(VARVISC_OVERRIDES)
+    override_names = fieldnames(VARVISC_OVERRIDES);
+    for oi = 1:numel(override_names)
+        params.(override_names{oi}) = VARVISC_OVERRIDES.(override_names{oi});
+    end
+end
 params.solvers     = varvisc_define_solver_list(params);   % solver/preconditioner registry
 
 geometry = 'stokes_varvisc_rotor';
@@ -86,10 +94,12 @@ velbc_fun = @(t) struct('dofs', veldofs, 'vals', velvals);   % steady inflow
 geo = struct('x1', x1, 'x2', x2, 'y1', y1, 'y2', y2, ...
              'xc', (x1+x2)/2, 'yc', (y1+y2)/2, ...
              'h0', params.h0, 'Tmax', params.dt * (params.Tstep - 1));
+if isfield(params,'PHYSICAL_TMAX'), geo.Tmax = params.PHYSICAL_TMAX; end
 
 all_cases = varvisc_define_case_list(params.dt);
 all_names = cellfun(@(c) c.name, all_cases, 'UniformOutput', false);
 case_names = {'bar_rotating_nu_orbiting', 'disk_translating_nu_wake', 'disk_static_nu_const'};
+if isfield(params,'CASE_NAMES'), case_names = params.CASE_NAMES; end
 
 if evalin('base', 'exist(''SMOKE_TEST'',''var'') && logical(SMOKE_TEST)')
     fprintf('[SMOKE_TEST] Overriding params for fast end-to-end check.\n');
@@ -98,13 +108,32 @@ if evalin('base', 'exist(''SMOKE_TEST'',''var'') && logical(SMOKE_TEST)')
 end
 
 results_root = fullfile(thisFileDir, 'benchmark_varvisc');
+if isfield(params,'RESULTS_NAME'), results_root = fullfile(thisFileDir,params.RESULTS_NAME); end
 if ~exist(results_root, 'dir'), mkdir(results_root); end
 
 %% ===================== 4. Loop over cases =================================
 num_cases = numel(case_names);
 all_stats = cell(num_cases, 1);
+case_start_rng = rng;
 for k = 1:num_cases
     cname = case_names{k};
+    run_dir = fullfile(results_root, cname);
+    checkpoint = fullfile(run_dir,'solver_stats.mat');
+    if isfield(params,'RUN_CASE_INDEX') && k ~= params.RUN_CASE_INDEX
+        continue;
+    end
+    if isfield(params,'RESUME_COMPLETED_CASES') && params.RESUME_COMPLETED_CASES && isfile(checkpoint)
+        saved = load(checkpoint,'st');
+        all_stats{k} = saved.st;
+        fprintf('[resume] retained completed case %s\n',cname);
+        continue;
+    end
+    if isfield(params,'POSTPROCESS_ONLY') && params.POSTPROCESS_ONLY
+        error('run_varvisc_benchmark:missingCase','Missing completed case: %s',cname);
+    end
+    if isfield(params,'RESET_RNG_EACH_CASE') && params.RESET_RNG_EACH_CASE
+        rng(case_start_rng);
+    end
     idx   = find(strcmp(all_names, cname), 1);
     mcase = all_cases{idx}.factory(geo);
 
@@ -128,11 +157,22 @@ for k = 1:num_cases
     st.geometry  = geometry;   % carried so the plot writers need no extra args
     st.dt        = params.dt;
     all_stats{k} = st;
+    % Retain each completed case before starting the next expensive sequence.
+    pending_checkpoint = fullfile(run_dir,'solver_stats.pending.mat');
+    save(pending_checkpoint,'st','-v7');
+    movefile(pending_checkpoint,checkpoint,'f');
 
     % --- coefficient movie for the stress case: nu field + rotor points ---
     if mcase.is_stress
         write_coefficient_movie(msh, mcase.nu_fun, mcase.motion_fun, params, run_dir);
     end
+end
+
+% Separate case invocations write only their own directories. A later
+% 'finalize' invocation loads the checkpoints and owns all root-level output.
+if isfield(params,'RUN_CASE_INDEX')
+    fprintf('[case complete] %s\n',case_names{params.RUN_CASE_INDEX});
+    return;
 end
 
 solver_keys   = all_stats{1}.solver_keys;
@@ -163,12 +203,19 @@ varvisc_write_all_cases_comparison(fullfile(results_root, 'summary_plots'), all_
 write_speedup_summary(results_root, all_stats, geometry);
 
 % --- run config (strip non-serializable solver handles; keep keys/labels) ---
-params_save = rmfield(params, 'solvers');
+params_save = rmfield(params, intersect(fieldnames(params), ...
+    {'solvers','POSTPROCESS_ONLY','RUN_CASE_INDEX'}));
 cfg_out.params        = params_save;
 cfg_out.geometry      = geometry;
 cfg_out.case_names    = case_names;
 cfg_out.solver_keys   = solver_keys;
 cfg_out.solver_labels = solver_labels;
+cfg_out.physical_Tmax = geo.Tmax;
+cfg_out.matlab_version = version;
+cfg_out.compute_threads = maxNumCompThreads;
+if isfield(params,'RESET_RNG_EACH_CASE') && params.RESET_RNG_EACH_CASE
+    cfg_out.case_start_rng = case_start_rng;
+end
 save(fullfile(results_root, 'run_config.mat'), 'cfg_out');
 jstr = jsonencode(cfg_out);
 fid = fopen(fullfile(results_root, 'run_config.json'), 'w');
@@ -176,6 +223,12 @@ if fid > 0, fwrite(fid, jstr); fclose(fid); end
 
 % --- per-(geometry,case) paper summary table ---
 varvisc_make_paper_summary_table(results_root);
+
+if isfield(params,'AUGMENT_ENABLED') && params.AUGMENT_ENABLED
+    varvisc_analyze_augmentation(results_root);
+    varvisc_plot_augmentation(results_root);
+    validate_varvisc_augmentation_results(results_root);
+end
 
 fprintf('\n[stokes_varvisc_rotor] done. Output in %s\n', results_root);
 
