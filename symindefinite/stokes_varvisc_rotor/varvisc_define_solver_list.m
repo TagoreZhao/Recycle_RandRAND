@@ -30,6 +30,9 @@ function solvers = varvisc_define_solver_list(params)
 %             build+minres path.  iters MUST be a SCALAR -- the engine assigns
 %             it into one element of a per-step array, so a 1x2 [outer inner]
 %             from gmres has to be collapsed by the closure.
+%     .returns_info logical OPTIONAL.  When true, .solve returns a fifth
+%             scalar-telemetry struct.  The engine records each numeric scalar
+%             under Astat.solver_info.(key) without changing older entries.
 %
 %   pc is a context struct the engine fills (see solve_stokes_varvisc; unlike
 %   the constant-viscosity engine there are no constant preconditioner pieces):
@@ -136,6 +139,46 @@ function solvers = varvisc_define_solver_list(params)
     ESKETCH_K = round(ESK.oversample * ESK.sm_eig);
 
     solvers = {};
+
+    % Focused upgraded-example profile: one plain ILDL baseline and two
+    % rank-matched exact-basis arms.  Both deflation arms use the same frozen
+    % physical subspace; only tau differs, which isolates the dynamic selector.
+    if strcmpi(getdef(params, 'SOLVER_PROFILE', 'full'), 'dynamic_tau')
+        base_opts = DEFL;
+        base_opts.cache_suffix = '_focus_baseline';
+        fixed_opts = DEFL;
+        fixed_opts.method = 'exact';
+        fixed_opts.cache_suffix = '_focus_fixed';
+        dynamic_opts = DEFL;
+        dynamic_opts.method = 'exact';
+        dynamic_opts.cache_suffix = '_focus_dynamic';
+        solvers = { ...
+            struct( ...
+                'key', 'ildl_nofill', ...
+                'label', 'MINRES (incomplete-LDL, no-fill)', ...
+                'build', [], ...
+                'solve', @(K,b,tol,mit,pc) tl_solve( ...
+                    K, b, tol, mit, pc, 'none', base_opts, ...
+                    R_ildl, R_deflat, R_dinv)), ...
+            struct( ...
+                'key', 'two_level_exact_fixed_tau', ...
+                'label', sprintf(['MINRES (ILDL + stale exact rank-%d ' ...
+                    'deflation, fixed tau=%.3g)'], DEFL.sm_eig, DEFL.tau), ...
+                'build', [], 'returns_info', true, ...
+                'solve', @(K,b,tol,mit,pc) tl_solve_instrumented( ...
+                    K, b, tol, mit, pc, fixed_opts, R_ildl, ...
+                    R_deflat, R_dinv, false)), ...
+            struct( ...
+                'key', 'two_level_exact_dynamic_tau', ...
+                'label', sprintf(['MINRES (ILDL + stale exact rank-%d ' ...
+                    'deflation, dynamic spectral tau)'], DEFL.sm_eig), ...
+                'build', [], 'returns_info', true, ...
+                'solve', @(K,b,tol,mit,pc) tl_solve_instrumented( ...
+                    K, b, tol, mit, pc, dynamic_opts, R_ildl, ...
+                    R_deflat, R_dinv, true))};
+        solvers = solvers(:);
+        return;
+    end
 
     solvers{end+1} = struct( ...
         'key',   'minres_unprec', ...
@@ -262,6 +305,28 @@ function [x, fl, rr, it] = tl_solve(K, b, tol, mit, pc, method, opts, R_ildl, R_
     [x, fl, rr, it] = src.precond.two_level_split_solve(K, b, tol, mit, P, V, opts.tau);
 end
 
+function [x, fl, rr, it, info] = tl_solve_instrumented( ...
+        K, b, tol, mit, pc, opts, R_ildl, R_deflat, R_dinv, dynamic_tau)
+%TL_SOLVE_INSTRUMENTED Exact stale-basis solve with auditable tau telemetry.
+    [P, V] = two_level_parts( ...
+        K, pc, 'exact', opts, R_ildl, R_deflat, R_dinv);
+    basis_entry = pc.cache(['V_exact' getdef(opts, 'cache_suffix', '')]);
+    if dynamic_tau
+        C = current_C(pc, P, getdef(opts, 'cache_suffix', ''));
+        [tau, info] = src.precond.select_deflation_tau_spectral( ...
+            K, P, size(V, 2), C);
+        info.tau_mode_dynamic = 1;
+    else
+        tau = opts.tau;
+        info = struct('tau', tau, 'cutoff_abs', NaN, ...
+            'deflation_rank', size(V, 2), ...
+            'eigenvalues_requested', 0, 'tau_mode_dynamic', 0);
+    end
+    info.basis_built_step = basis_entry.step;
+    [x, fl, rr, it] = src.precond.two_level_split_solve( ...
+        K, b, tol, mit, P, V, tau);
+end
+
 function [x, fl, rr, it] = exact_ldl_solve(K, b, tol, mit, pc, refresh, tau)
 %EXACT_LDL_SOLVE  Split MINRES preconditioned by the EXACT LDL^T factor of the KKT
 % matrix from the last refresh step (default: step 1, then frozen forever).
@@ -369,7 +434,7 @@ function P = cached_ildl(K, pc, opts, R_ildl)
 %CACHED_ILDL  The ILDL smoother on its own refresh cadence, under the key every
 % two-level entry shares (so it is built at most once per refresh-step no matter
 % how many solvers ask for it).
-    ikey = ['ildl_' opts.ildl_mode];
+    ikey = ['ildl_' opts.ildl_mode getdef(opts, 'cache_suffix', '')];
     ildl_opts = struct('mode', opts.ildl_mode);
     if strcmp(opts.ildl_mode, 'droptol'), ildl_opts.droptol = opts.droptol; end
     P = cached(pc, ikey, R_ildl, ...
@@ -395,11 +460,14 @@ function [P, V] = two_level_parts(K, pc, method, opts, R_ildl, R_deflat, R_dinv)
         dA = cached(pc, 'dinv', R_dinv, @() decomposition(K));
     end
     o = opts;  o.method = method;
-    V = cached_basis(pc, ['V_' method], R_deflat, K, P, ...
+    cache_suffix = getdef(opts, 'cache_suffix', '');
+    V = cached_basis(pc, ...
+                     ['V_' method cache_suffix], ...
+                     R_deflat, K, P, cache_suffix, ...
                      @() src.precond.build_deflation_V(K, P, o, dA));
 end
 
-function V = cached_basis(pc, key, refresh, K, P, buildFn)
+function V = cached_basis(pc, key, refresh, K, P, coordinate_suffix, buildFn)
 %CACHED_BASIS  Refresh cache for a DEFLATION BASIS, held in PHYSICAL coordinates.
 %
 % Same cadence as `cached`, but what is stored is the PHYSICAL basis U = C^-T V
@@ -448,7 +516,8 @@ function V = cached_basis(pc, key, refresh, K, P, buildFn)
         return;
     end
 
-    [V, info] = transport_V(e.U, P, current_C(pc, P));   % orth(C_n^T U)
+    [V, info] = transport_V( ...
+        e.U, P, current_C(pc, P, coordinate_suffix));    % orth(C_n^T U)
     if info.rank_drop > 0
         % A smaller but clean coarse space beats a rank-deficient one (E = V'Ahat^2 V
         % must stay SPD), but a silent shrink must not go unnoticed.
@@ -462,19 +531,21 @@ function V = cached_basis(pc, key, refresh, K, P, buildFn)
     c(key)  = e;
 end
 
-function C = current_C(pc, P)
+function C = current_C(pc, P, cache_suffix)
 %CURRENT_C  Explicit split factor C = S^-1 P^T L |D|^{1/2} for THIS step, memoized
 % so the two-level entries share one materialization instead of rebuilding it each.
+    if nargin < 3, cache_suffix = ''; end
     c = pc.cache;
-    if isKey(c, 'ildl_C')
-        e = c('ildl_C');
+    cache_key = ['ildl_C' cache_suffix];
+    if isKey(c, cache_key)
+        e = c(cache_key);
         if e.step == pc.step && size(e.val, 1) == numel(P.s)
             C = e.val;
             return;
         end
     end
     C = ildl_coordinate_map(P);
-    c('ildl_C') = struct('step', pc.step, 'val', C);
+    c(cache_key) = struct('step', pc.step, 'val', C);
 end
 
 function add_transport_path()

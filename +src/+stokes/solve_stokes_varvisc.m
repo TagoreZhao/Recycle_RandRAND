@@ -56,7 +56,8 @@ function Astat = solve_stokes_varvisc(cfg, params, save_dir)
 %
 %   Returns Astat with (Tstep-1)x1 per-step arrays, keyed by solver:
 %     .solver_keys, .solver_labels  - ordered ids/labels from the registry
-%     .solver_its/.solver_flag/.solver_relres/.solver_err.(key)
+%     .solver_its/.solver_flag/.solver_relres/.solver_err/.solver_time.(key)
+%     .solver_info.(key).field for optional scalar solver telemetry
 %     .backslash_relres, .constraint_res
 %     .coupling_change   (||C(t_n) - C(t_{n-1})||_F / ||C(t_{n-1})||_F)
 %     .diffK             (||F(t_n) - F(t_{n-1})||_F / ||F(t_{n-1})||_F,
@@ -143,13 +144,19 @@ function Astat = solve_stokes_varvisc(cfg, params, save_dir)
     Astat.solver_its    = struct();
     Astat.solver_flag   = struct();
     Astat.solver_relres = struct();
+    Astat.solver_true_relres = struct();
     Astat.solver_err    = struct();
+    Astat.solver_time   = struct();
+    Astat.solver_info   = struct();
     for s = 1:nsolv
         k = solver_keys{s};
         Astat.solver_its.(k)    = zeros(nsteps, 1);
         Astat.solver_flag.(k)   = zeros(nsteps, 1);
         Astat.solver_relres.(k) = zeros(nsteps, 1);
+        Astat.solver_true_relres.(k) = zeros(nsteps, 1);
         Astat.solver_err.(k)    = zeros(nsteps, 1);
+        Astat.solver_time.(k)   = zeros(nsteps, 1);
+        Astat.solver_info.(k)   = struct();
     end
     Astat.backslash_relres     = zeros(nsteps, 1);
     Astat.constraint_res       = zeros(nsteps, 1);
@@ -261,8 +268,16 @@ function Astat = solve_stokes_varvisc(cfg, params, save_dir)
         it_last = NaN; rr_last = NaN; err_last = NaN;   % for the progress print
         for s = 1:nsolv
             s_entry = solvers{s};
+            solve_timer = tic;
             if isfield(s_entry, 'solve') && ~isempty(s_entry.solve)
-                [x_s, fl_s, rr_s, it_s] = s_entry.solve(K, b, tol, mit, pc);
+                if isfield(s_entry, 'returns_info') && s_entry.returns_info
+                    [x_s, fl_s, rr_s, it_s, info_s] = ...
+                        s_entry.solve(K, b, tol, mit, pc);
+                else
+                    [x_s, fl_s, rr_s, it_s] = ...
+                        s_entry.solve(K, b, tol, mit, pc);
+                    info_s = struct();
+                end
             else
                 Papply = s_entry.build(pc);             % [] -> unpreconditioned
                 if isempty(Papply)
@@ -270,12 +285,19 @@ function Astat = solve_stokes_varvisc(cfg, params, save_dir)
                 else
                     [x_s, fl_s, rr_s, it_s] = minres(K, b, tol, mit, Papply);
                 end
+                info_s = struct();
             end
+            elapsed_s = toc(solve_timer);
             k = solver_keys{s};
             Astat.solver_flag.(k)(n)   = fl_s;
             Astat.solver_relres.(k)(n) = rr_s;
+            Astat.solver_true_relres.(k)(n) = ...
+                norm(K * x_s - b) / max(norm(b), eps);
             Astat.solver_its.(k)(n)    = it_s;
             Astat.solver_err.(k)(n)    = norm(x_s - x_ref) / max(norm(x_ref), eps);
+            Astat.solver_time.(k)(n)   = elapsed_s;
+            Astat.solver_info.(k) = record_solver_info( ...
+                Astat.solver_info.(k), info_s, n, nsteps);
             it_last = it_s; rr_last = rr_s; err_last = Astat.solver_err.(k)(n);
         end
 
@@ -309,6 +331,24 @@ function Astat = solve_stokes_varvisc(cfg, params, save_dir)
 
     if ~isempty(save_dir)
         if ~exist(save_dir, 'dir'), mkdir(save_dir); end
+    end
+end
+
+% -------------------------------------------------------------------------
+function stored = record_solver_info(stored, current, step, nsteps)
+%RECORD_SOLVER_INFO Append numeric scalar telemetry without imposing a schema.
+    if isempty(current), return; end
+    names = fieldnames(current);
+    for j = 1:numel(names)
+        name = names{j};
+        value = current.(name);
+        if ~(isnumeric(value) || islogical(value)) || ~isscalar(value)
+            continue;
+        end
+        if ~isfield(stored, name)
+            stored.(name) = nan(nsteps, 1);
+        end
+        stored.(name)(step) = double(value);
     end
 end
 

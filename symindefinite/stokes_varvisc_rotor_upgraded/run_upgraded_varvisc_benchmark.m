@@ -10,6 +10,7 @@ import src.stokes.*
 rng(1);
 
 params = varvisc_default_benchmark_params();
+params.h0 = 0.05;  % verified upgraded mesh; parent benchmark defaults to 0.03
 physical_Tmax = params.dt * (params.Tstep - 1);
 is_smoke = evalin('base', ...
     'exist(''SMOKE_TEST'',''var'') && logical(SMOKE_TEST)');

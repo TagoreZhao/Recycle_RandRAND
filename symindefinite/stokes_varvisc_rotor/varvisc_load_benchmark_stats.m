@@ -88,14 +88,34 @@ function [all_stats, cfg] = varvisc_load_benchmark_stats(results_root)
         st.solver_labels = labels(:);
         st.solver_its    = struct();
         st.solver_flag   = struct();
+        st.solver_relres = struct();
+        st.solver_true_relres = struct();
+        st.solver_err = struct();
+        st.solver_time = struct();
+        st.solver_info = struct();
         for s = 1:numel(keys)
-            st.solver_its.(keys{s})  = Tk.([keys{s} '_its']);
-            flagCol = [keys{s} '_flag'];
+            key = keys{s};
+            st.solver_its.(key)  = Tk.([key '_its']);
+            flagCol = [key '_flag'];
             if ismember(flagCol, vn)
-                st.solver_flag.(keys{s}) = Tk.(flagCol);
+                st.solver_flag.(key) = Tk.(flagCol);
             else
-                st.solver_flag.(keys{s}) = zeros(height(Tk), 1);
+                st.solver_flag.(key) = zeros(height(Tk), 1);
             end
+            st.solver_relres.(key) = optional_solver_col(Tk, key, 'relres');
+            st.solver_true_relres.(key) = ...
+                optional_solver_col(Tk, key, 'true_relres');
+            st.solver_err.(key) = optional_solver_col(Tk, key, 'err');
+            st.solver_time.(key) = optional_solver_col(Tk, key, 'time_s');
+            standard = strcat(key, {'_its', '_flag', '_time_s', '_relres', ...
+                '_true_relres', '_err'});
+            prefixed = vn(startsWith(vn, [key '_']));
+            info_cols = setdiff(prefixed, standard, 'stable');
+            info = struct();
+            for j = 1:numel(info_cols)
+                info.(erase(info_cols{j}, [key '_'])) = Tk.(info_cols{j});
+            end
+            st.solver_info.(key) = info;
         end
         st.coupling_change  = col(Tk, 'diffF',            vn, height(Tk));
         st.constraint_res   = col(Tk, 'constraint_res',   vn, height(Tk));
@@ -105,7 +125,8 @@ function [all_stats, cfg] = varvisc_load_benchmark_stats(results_root)
         st.diffK            = col(Tk, 'diffK',            vn, height(Tk));
         st.nu_contrast      = col(Tk, 'nu_contrast',      vn, height(Tk));
         st.dK_nnz_frac      = col(Tk, 'dK_nnz_frac',      vn, height(Tk));
-        if ismember('solver_err_last', vn) && ~all(isnan(Tk.solver_err_last))
+        if all(isnan(st.solver_err.(keys{end}))) && ...
+                ismember('solver_err_last', vn) && ~all(isnan(Tk.solver_err_last))
             st.solver_err.(keys{end}) = Tk.solver_err_last;
         end
         all_stats{k} = st;
@@ -116,6 +137,15 @@ function [all_stats, cfg] = varvisc_load_benchmark_stats(results_root)
     cfg.solver_labels = labels(:);
     cfg.case_names    = cellstr(cases(:));
     cfg.geometry      = geometry;
+end
+
+function values = optional_solver_col(T, key, suffix)
+    name = [key '_' suffix];
+    if ismember(name, T.Properties.VariableNames)
+        values = T.(name);
+    else
+        values = nan(height(T), 1);
+    end
 end
 
 %==========================================================================

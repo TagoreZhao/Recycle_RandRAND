@@ -45,6 +45,25 @@ function [h, legLabels] = varvisc_plot_solver_curves(ax, xax, stats, xlab, opts)
     hold(ax, 'off');
 
     set(ax, 'YScale', opts.yscale);
+    if strcmpi(opts.yscale, 'linear')
+        values = [];
+        for s = 1:n
+            values = [values; stats.solver_its.(keys{s})(:)]; %#ok<AGROW>
+        end
+        lo = max(0, floor(min(values)));
+        hi = max(lo + 1, ceil(max(values)));
+        raw_step = max(1, ceil((hi - lo) / 10));
+        nice_steps = [1, 2, 5] .* 10 .^ floor(log10(raw_step));
+        tick_step = nice_steps(find(nice_steps >= raw_step, 1, 'first'));
+        if isempty(tick_step)
+            tick_step = 10 ^ ceil(log10(raw_step));
+        end
+        lo_tick = floor(lo / tick_step) * tick_step;
+        hi_tick = ceil(hi / tick_step) * tick_step;
+        ylim(ax, [lo_tick, max(lo_tick + tick_step, hi_tick)]);
+        yticks(ax, lo_tick:tick_step:max(lo_tick + tick_step, hi_tick));
+        ytickformat(ax, '%d');
+    end
     grid(ax, 'on');
     if ~isempty(xlab), xlabel(ax, xlab); end
     % 'Krylov', not 'MINRES': the registry now mixes MINRES arms with the GMRES
