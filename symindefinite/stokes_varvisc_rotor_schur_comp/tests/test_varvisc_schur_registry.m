@@ -27,7 +27,8 @@ cfg = varvisc_schur_make_cfg('bar_rotating_nu_orbiting',p,[]);
 A = solve_varvisc_schur_sequence(cfg,p,'');
 expected = {'pcg_unprec','chol','deflate_shared_small', ...
     'deflate_gaussian_large','deflate_sequential_shared_subspace', ...
-    'deflate_concatenated_once','deflate_adaptive_small_lift_large'};
+    'deflate_concatenated_once','deflate_adaptive_small_lift_large', ...
+    'deflate_sequential_shared_subspace_augmented'};
 assert(isequal(A.solver_keys(:)',expected),'Unexpected registry ordering.');
 for keyIndex = 1:numel(expected)
     key = expected{keyIndex};

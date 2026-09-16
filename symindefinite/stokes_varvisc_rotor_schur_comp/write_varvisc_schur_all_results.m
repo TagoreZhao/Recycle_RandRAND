@@ -7,7 +7,7 @@ function write_varvisc_schur_all_results(results_root, all_stats)
         'pressure_schur_change','pressure_schur_change_probe','nu_contrast', ...
         'backslash_relres','vel_recovery_err','schur_ref_relres', ...
         'reference_flag','reference_relres','reference_its', ...
-        'symmetry_res','symmetry_probe_res','chol_flag','nC','nS'};
+        'symmetry_res','symmetry_probe_res','nC','nS'};
     for ci = 1:numel(all_stats)
         A = all_stats{ci};
         for n = 1:A.nsteps
@@ -18,6 +18,15 @@ function write_varvisc_schur_all_results(results_root, all_stats)
                 r.([key '_its']) = A.solver_its.(key)(n);
                 r.([key '_flag']) = A.solver_flag.(key)(n);
                 r.([key '_err']) = A.solver_err.(key)(n);
+                r.([key '_relres']) = A.solver_relres.(key)(n);
+                r.([key '_true_relres']) = A.solver_true_relres.(key)(n);
+                if isfield(A,'augmentation') && isfield(A.augmentation,key)
+                    fields = fieldnames(A.augmentation.(key));
+                    for fi = 1:numel(fields)
+                        field = fields{fi};
+                        r.([key '_' field]) = A.augmentation.(key).(field)(n);
+                    end
+                end
                 r.([key '_lambda_min']) = A.system_lambda_min.(key)(n);
                 r.([key '_lambda_max']) = A.system_lambda_max.(key)(n);
                 r.([key '_kappa_prec']) = A.system_kappa.(key)(n);
@@ -31,6 +40,8 @@ function write_varvisc_schur_all_results(results_root, all_stats)
             for i = 1:numel(diagnostics)
                 f = diagnostics{i}; r.(f) = A.(f)(n);
             end
+            % Keep factor diagnostics separate from the solver named 'chol'.
+            r.factor_chol_flag = A.chol_flag(n);
             rows{end+1} = r; %#ok<AGROW>
         end
     end

@@ -4,13 +4,26 @@ function replot_varvisc_schur(results_root)
     if nargin < 1 || isempty(results_root), results_root = paths.outDir; end
     T = readtable(fullfile(results_root,'all_results.csv'));
     vars = T.Properties.VariableNames;
-    itscols = vars(endsWith(vars,'_its'));
+    itscols = vars(endsWith(vars,'_its') & ~strcmp(vars,'reference_its'));
     keys = cellfun(@(x) x(1:end-4),itscols,'UniformOutput',false);
     labels = keys;
     cfgfile = fullfile(results_root,'run_config.mat');
     if exist(cfgfile,'file')
         L = load(cfgfile,'cfg_dump');
-        if isfield(L.cfg_dump,'solver_labels'), labels = L.cfg_dump.solver_labels; end
+        if isfield(L.cfg_dump,'solver_keys')
+            recordedKeys = cellstr(L.cfg_dump.solver_keys);
+            keep = ismember(recordedKeys,keys);
+            keys = recordedKeys(keep);
+            itscols = cellfun(@(key)[key '_its'],keys,'UniformOutput',false);
+            labels = keys;
+            if isfield(L.cfg_dump,'solver_labels')
+                recordedLabels = cellstr(L.cfg_dump.solver_labels);
+                labels = recordedLabels(keep);
+            end
+        elseif isfield(L.cfg_dump,'solver_labels') && ...
+                numel(L.cfg_dump.solver_labels)==numel(keys)
+            labels = L.cfg_dump.solver_labels;
+        end
     end
     cases = unique(T.case_name,'stable'); stats = cell(numel(cases),1);
     diagnostics = {'kappa','lambda_min','lambda_max','ReldiffF', ...

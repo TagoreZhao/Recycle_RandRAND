@@ -73,6 +73,7 @@ cfg_dump.small_basis_built_step = all_stats{1}.small_basis_built_step;
 cfg_dump.shared_large_basis_built_step = ...
     all_stats{1}.shared_large_basis_built_step;
 cfg_dump.small_basis_source = all_stats{1}.small_basis_source;
+cfg_dump.augmentation = all_stats{1}.augmentation;
 cfg_dump.mesh_N = msh.N;
 cfg_dump.matlab = version;
 cfg_dump.finished = datestr(now,'yyyy-mm-ddTHH:MM:SS'); %#ok<TNOW1,DATST>

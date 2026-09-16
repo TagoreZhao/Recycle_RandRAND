@@ -1,8 +1,9 @@
 function sty = varvisc_schur_style_table(n)
 %VARVISC_SCHUR_STYLE_TABLE  Colourblind-safe curve styles.
-    colors = [0 0 0; .84 .37 0; 0 .45 .70; 0 .62 .45; .80 .47 .65; .6 .6 .6];
-    markers = {'o','s','^','d','v','p'};
-    lines = {'-','--','-.','-',':','--'};
+    colors = [0 0 0; .84 .37 0; 0 .45 .70; 0 .62 .45; .80 .47 .65; .6 .6 .6; ...
+              .65 .50 0; .30 .20 .65];
+    markers = {'o','s','^','d','v','p','h','>'};
+    lines = {'-','--','-.','-',':','--','-.','-'};
     sty = repmat(struct('color',[0 0 0],'marker','o','linestyle','-', ...
                         'linewidth',1.6),n,1);
     for i = 1:n

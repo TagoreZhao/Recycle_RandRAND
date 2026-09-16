@@ -9,6 +9,7 @@ function params = make_varvisc_schur_params()
     params.SOLVER_MAXIT = 1e5;
     params.REFERENCE_TOL = 1e-10;
     params.REFERENCE_MAXIT = params.SOLVER_MAXIT;
+    params.AUGMENT_M = 20;
 
     params.sm_eig = 20;
     params.lg_eig = 100;
@@ -44,5 +45,7 @@ function params = make_varvisc_schur_params()
         struct('name','deflate_concatenated_once', ...
                'design','concatenated_once'), ...
         struct('name','deflate_adaptive_small_lift_large', ...
-               'design','adaptive_small_lift_large')];
+               'design','adaptive_small_lift_large'), ...
+        struct('name','deflate_sequential_shared_subspace_augmented', ...
+               'design','sequential_shared_subspace_augmented')];
 end

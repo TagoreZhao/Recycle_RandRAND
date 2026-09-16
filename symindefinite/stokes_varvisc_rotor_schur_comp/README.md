@@ -1,5 +1,234 @@
 # Schur complement of variable-viscosity immersed-rotor Stokes
 
+## Two-stage shared-subspace augmentation in the main benchmark
+
+The default main benchmark includes `deflate_sequential_shared_subspace_augmented`
+alongside the original two-stage shared-subspace solver. This is the only
+main-benchmark arm with fresh Arnoldi augmentation; the other deflation
+methods retain their existing algorithms.
+
+```matlab
+addpath('symindefinite/stokes_varvisc_rotor_schur_comp');
+maxNumCompThreads(4);
+SMOKE_TEST = true; run_varvisc_schur_recycle;
+SMOKE_TEST = false; run_varvisc_schur_recycle;
+% Regenerate plots from saved CSVs:
+replot_varvisc_schur;
+```
+
+Both two-stage arms share the complete cached basis
+`V = orth([V_large,V_small])`, its refresh schedule, and both tau values.
+With current defaults this contains 200 Gaussian large-mode columns and
+20 Lanczos small-mode columns, subject to numerical rank. At each step the
+augmented arm builds `W` using two-pass Arnoldi on `Pi*S_i*Pi`, starting
+from `Pi*(rhs_i-S_i*x0)`, where `Pi=I-V*V'` and `x0` is the shared warm start
+from the previous reference solution. Thus augmentation uses the current
+residual, including the nonzero initial guess.
+
+The **same `Z=[V,W]` is used in both stages**. If
+`D(Z,A,tau)=I-Z*Z'+tau*Z*(Z'*A*Z)^(-1)*Z'`, the construction is
+`H1=D(Z,S_i,tau1)^(1/2)`, `S1=H1*S_i*H1`,
+`P2=D(Z,S1,tau2)`, and the PCG inverse preconditioner is `H1*P2*H1`.
+Both coarse matrices are built from their current operators. `W` is held
+fixed during PCG and discarded afterward; it never enters the recycled cache.
+`AUGMENT_M=20` is set in `make_varvisc_schur_params`; zero gives the exact
+unaugmented two-stage path. Breakdown is recorded without random padding.
+
+The four-case full run uses 60 timesteps, `h=0.05`, `dt=0.02`, and seed 1.
+Main-benchmark PCG and reference settings are shared across all arms.
+Outputs under `varvisc_schur_recycle/` include the new arm in
+`all_results.csv`, all-solver plots and cross-case summaries, plus
+`two_stage_augmentation_summary.csv`, `two_stage_augmentation_report.md`,
+and each case's linear `two_stage_augmentation_comparison.png`.
+The master CSV records true and reported residuals, reference-solution errors,
+base/added dimensions, Arnoldi status, orthogonality, recurrence error,
+Arnoldi time, and Arnoldi/residual operator columns. `chol_flag` records the
+frozen-Cholesky solver flag; `factor_chol_flag` separately records the Schur
+factorization diagnostic. The dedicated summary compares
+iterations with the unaugmented two-stage solver and retains failed solves.
+Iteration reductions alone do not establish a runtime improvement.
+
+The completed full run measured:
+
+| Case | Two-stage iterations | Augmented two-stage iterations | Iterations saved |
+|---|---:|---:|---:|
+| `bar_rotating_nu_orbiting` | 7,777 | 6,617 | 14.92% |
+| `disk_translating_nu_wake` | 7,107 | 5,065 | 28.73% |
+| `disk_static_nu_checkerboard_shift` | 8,766 | 6,260 | 28.59% |
+| `disk_static_nu_const` | 127 | 110 | 13.39% |
+
+All 1,920 solves across eight arms and four 60-step cases met the accuracy
+criteria. Every augmented solve used 220 recycled columns plus 20 fresh
+directions; the largest augmented true residual was `9.9998e-9` and the
+largest relative reference-solution error was `3.175e-8`. In the constant
+control, both two-stage arms need zero PCG iterations from step 19 onward
+because their shared warm start already meets tolerance. The 14-test suite
+and all 24 native smoke solves also passed.
+
+See the [full two-stage report](varvisc_schur_recycle/two_stage_augmentation_report.md)
+for the paired summary and iteration-versus-step plots for all four cases.
+
+## Standalone inverse-Gaussian augmentation
+
+```matlab
+addpath('symindefinite/stokes_varvisc_rotor_schur_comp');
+addpath('symindefinite/stokes_varvisc_rotor_schur_comp/tests');
+test_varvisc_schur_augmentation;
+test_varvisc_schur_augmented_workflow;
+run_varvisc_schur_augmented_benchmark('smoke');
+run_varvisc_schur_augmented_benchmark('full');
+% Resume a seed/case, or regenerate the completed full report:
+run_varvisc_schur_augmented_benchmark('full',2,1);
+run_varvisc_schur_augmented_benchmark('finalize');
+```
+
+This two-arm experiment transfers the parent's
+[projected-Arnoldi augmentation](../stokes_varvisc_rotor/GAUSSIAN_AUGMENTED_SOLVE.md)
+to the reduced SPD Schur system. Both arms share the frozen basis
+`V = orth(S_1^(-2)*Omega)`, computed using two exact inverse applications at
+step 1. All numerically independent columns are retained in the fixed reduced
+pressure/multiplier coordinates. At every timestep the augmented arm builds
+up to 20 fresh directions from
+`K_20((I-V*V')*S_i*(I-V*V'), (I-V*V')*rhs_i)` using two-pass projected
+Arnoldi. It discards those directions after solving; only `V` is recycled.
+Breakdown and limited complement dimensions are recorded without random padding.
+
+With `Z=V` or `Z=[V,W_i]`, the inverse preconditioner is
+`P = I-Z*Z' + tau*Z*(Z'*S_i*Z)^(-1)*Z'`. This uses the existing Schur
+coarse correction and PCG, with a common frozen `tau=lambda_max(S_1)`.
+Both coarse matrices use the current operator. PCG starts from zero, uses
+tolerance `1e-8`, and has a 4,000-iteration cap. The dense Schur matrix and
+its exact Cholesky are needed only initially; later augmentation, coarse
+setup, and PCG use operator handles. The velocity factor within the current
+Schur operator is still rebuilt every timestep.
+
+Full runs use `h=0.05`, 60 solves, `dt=0.02`, seeds 1–3, and 1,000 Gaussian
+columns (nominal rank 500 with oversampling 2). Cases are the rotating bar
+with orbiting viscosity, the translating disk with a viscosity wake, and the
+static constant-viscosity disk. Smoke runs use all cases/seeds at `h=0.16`,
+16 Gaussian columns and three solves, retaining `m=20` and the full motion
+period. A saved mesh and direct-KKT reference state advance keep physical
+systems identical across seeds and solver arms. The driver sets four MATLAB
+compute threads and records the MATLAB version and thread count.
+
+Results are written to `varvisc_schur_augmented/` and its `_smoke` sibling:
+`augmentation_results.csv`, `augmentation_summary.csv`,
+`augmentation_paired_summary.csv`, `augmentation_validation.csv`, and
+`augmentation_report.md`. Plots show iterations, cumulative attributed time
+and forward operator work, true residuals, solution error, residual histories,
+and Arnoldi orthogonality. Complete per-step PCG histories and small Arnoldi
+matrices are retained under each case's `diagnostics/` directory.
+
+Timing includes full attributed initial setup for each arm, current Arnoldi,
+coarse construction, PCG and velocity recovery. Reference solves, diagnostics
+and output are excluded. Forward Schur operator columns include Arnoldi and
+coarse setup as well as PCG and initial tau iteration; inverse RHS columns
+and dense-materialization velocity RHS columns are separate. Thus lower PCG
+iteration counts need not mean less total work or time. The initial exact
+factor also permits a direct solve, so this compares recycling strategies.
+
+Validation requires flag zero, true Schur and recovered KKT residuals at most
+`1e-8`, and relative solution error at most `1e-5`. Failed solves remain in
+the output and aggregate totals; paired summaries also give iteration savings
+on pairs meeting all accuracy criteria. No speedup is assumed. Coordinate-map
+changes stop the experiment, and resumption rejects incompatible configuration.
+An optional fourth argument selects an isolated output directory; use it with
+`('finalize',[],[],output_root)` to regenerate a saved smoke report.
+
+The completed full experiment measured these medians of paired seed results:
+
+| Case | PCG iterations saved | Augmented/baseline forward work | Augmented/baseline time |
+|---|---:|---:|---:|
+| `bar_rotating_nu_orbiting` | 46.30% | 0.932x | 0.651x |
+| `disk_translating_nu_wake` | 35.79% | 0.957x | 0.728x |
+| `disk_static_nu_const` | 29.06% | 1.019x | 0.960x |
+
+Augmentation reduced both operator work and attributed time in the moving
+cases. The static control saved PCG iterations but increased total forward
+operator columns; its time ratio ranged from 0.918x to 1.031x across seeds.
+All 1,080 solves met the accuracy criteria, with maximum Schur residual
+`9.998e-9`, KKT residual `8.414e-9`, and relative solution error `4.831e-8`.
+Every augmented solve retained 1,000 base columns and added all 20 directions.
+The [full report](varvisc_schur_augmented/augmentation_report.md) contains seed
+ranges, cost components, validation data, and figures. The 13-test regression
+suite and all 54 smoke solves also passed.
+
+## Paired Gaussian recycling versus rebuilding
+
+```matlab
+addpath('symindefinite/stokes_varvisc_rotor_schur_comp');
+addpath('symindefinite/stokes_varvisc_rotor_schur_comp/tests');
+maxNumCompThreads(4);
+test_varvisc_schur_gaussian_refresh;
+run_varvisc_schur_gaussian_refresh('smoke');
+run_varvisc_schur_gaussian_refresh('full');
+% Resume one seed/case or replot the saved full experiment:
+run_varvisc_schur_gaussian_refresh('full',2,1);
+run_varvisc_schur_gaussian_refresh('finalize');
+```
+
+This focused experiment compares `orth(S_1^(-2)*Omega)`, built once and
+recycled, against `orth(S_i^(-1)*Omega)`, rebuilt every timestep. The power
+count keeps its existing meaning: `q=2` applies the inverse twice and `q=1`
+once. Each rebuilt sketch uses an exact Cholesky factorization of the current
+reduced Schur matrix, applied through triangular solves. All returned columns
+of the final `orth` are retained, with any numerical rank loss reported.
+The recycled basis stays in the fixed reduced pressure/multiplier coordinates.
+
+Both arms use zero-start PCG at tolerance `1e-8`, a 4,000-iteration cap, and
+the existing SPD correction `I-V*V' + tau*V*(V'*S_i*V)^(-1)*V'`. Their coarse
+matrices use the current Schur operator. A deterministic eigenvalue solve sets
+one common `tau=lambda_max(S_1)` per case, frozen for the entire sequence.
+
+The full experiment uses `h=0.05`, 60 steps, `dt=0.02`, seeds 1–3, and 1,000
+Gaussian columns (nominal rank 500, oversampling 2). It includes
+`bar_rotating_nu_orbiting`, `disk_translating_nu_wake`, and
+`disk_static_nu_const`. A saved mesh and direct-KKT reference trajectory keep
+the physical systems identical across seeds. Within each seed, one Gaussian
+start block is shared across both arms and all timesteps. The smoke run uses
+all three cases/seeds with `h=0.16`, 16 columns and three steps, preserving
+the full motion period.
+
+Results are saved under `varvisc_schur_gaussian_refresh/` (or the `_smoke`
+sibling): `comparison_results.csv`, `comparison_summary.csv`,
+`comparison_report.md`, convergence/work figures and complete residual
+histories in per-case `diagnostics/`. Per-case checkpoints are configuration
+checked; resume/finalize with the same MATLAB version and thread count.
+Changing reduced dimensions or coordinate masks stops the experiment rather
+than silently reusing an incompatible basis.
+
+Timing includes attributed Schur construction, dense materialization, exact
+Cholesky, initial tau selection, basis construction, coarse setup, PCG and
+velocity recovery. Reference solves, diagnostics and output are excluded;
+shared factors are charged fully to each algorithm requiring them. Exact
+Cholesky also permits a direct solve, so these timings compare the two basis
+strategies without claiming an advantage over direct solution. Inverse RHS,
+materialization velocity RHS and forward Schur operator counts are separate.
+
+Two inverse applications provide stronger small-eigenvalue filtering; one
+current inverse application still produces an approximate subspace. This
+experiment changes both power count and refresh cadence, so the result cannot
+isolate the effect of refreshing at fixed `q`. First-step and constant-control
+results expose initial basis quality without operator aging. PCG-reported
+histories, recomputed Schur residuals, recovered KKT residuals and reference
+solution errors are retained separately, including tolerance failures.
+
+The completed full run gave the following median total PCG iterations per
+60-step trajectory across the three seeds:
+
+| Case | Recycled `q=2` | Rebuilt `q=1` | Rebuilt/recycled attributed time |
+|---|---:|---:|---:|
+| `bar_rotating_nu_orbiting` | 16,440 | 14,960 | 1.44x |
+| `disk_translating_nu_wake` | 15,824 | 11,689 | 1.44x |
+| `disk_static_nu_const` | 4,147 | 5,095 | 2.76x |
+
+Refreshing reduces iterations on the moving Schur systems, but its repeated
+setup cost outweighs those savings in this run. All 1,080 solves returned
+zero PCG flags and met `1e-8` in both the recomputed Schur and recovered KKT
+residuals. Every basis retained 1,000 columns; the largest inverse-probe
+residual was `6.82e-14`. The [full report](varvisc_schur_gaussian_refresh/comparison_report.md)
+includes seed ranges, accuracy results, cost components and convergence plots.
+
 This benchmark is the reduced-system counterpart of
 [`../stokes_varvisc_rotor/`](../stokes_varvisc_rotor/). The parent problem
 produces a sequence of sparse, symmetric indefinite Stokes KKT systems. This
@@ -321,6 +550,7 @@ start.
 | `deflate_shared_small` | direct deflation with the centrally shared smallest-mode basis |
 | `deflate_gaussian_large` | Gaussian forward-power sketch for the largest modes |
 | `deflate_sequential_shared_subspace` | two-stage deflation; the same concatenated small+large basis is used in both stages |
+| `deflate_sequential_shared_subspace_augmented` | the same two-stage construction using the full shared basis plus fresh projected-Arnoldi directions in both stages |
 | `deflate_concatenated_once` | one standard deflator built from the concatenated small+large basis |
 | `deflate_adaptive_small_lift_large` | adaptive small-mode lift followed by large-mode deflation of the lifted operator |
 
@@ -591,7 +821,17 @@ The test suite checks the defining Schur properties:
 - `test_varvisc_schur_extreme_eigenvalues` validates the symmetric
   preconditioned extrema, residuals, CSV columns, and plots; and
 - `test_varvisc_schur_adaptive_tuning` exercises the two-stage workflow and
-  its recommendation artifacts in smoke mode.
+  its recommendation artifacts in smoke mode;
+- `test_varvisc_schur_gaussian_refresh` verifies the paired inverse-power
+  bases, current-factor freshness, fixed tau, and recovered KKT solution;
+- `test_varvisc_schur_augmentation` checks projected Arnoldi against an explicit
+  projection, coarse SPD, exact `m=0` equivalence, frozen-cache behavior,
+  operator counts, breakdown cases, and direct-solve agreement; and
+- `test_varvisc_schur_augmented_workflow` checks checkpoint resumption,
+  rejection of incomplete finalization, and configuration mismatch handling; and
+- `test_varvisc_schur_two_stage_augmentation` checks the shared augmented basis
+  in both stages, warm-start residuals, zero-augmentation equivalence, refreshes,
+  independent configuration, SPD/spectral correctness, CSVs and replotting.
 
 The construction is split between four benchmark-local helpers:
 

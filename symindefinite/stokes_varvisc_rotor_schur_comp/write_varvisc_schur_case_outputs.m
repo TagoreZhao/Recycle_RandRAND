@@ -29,6 +29,25 @@ function write_varvisc_schur_case_outputs(run_dir, A, opts)
     legend(ax,h,labels,'Interpreter','none','Location','best','FontSize',opts.legendfontsize);
     save_varvisc_schur_figure(fh,fullfile(run_dir,'all_solvers_comparison.png'),opts);
 
+    pair = {'deflate_sequential_shared_subspace', ...
+            'deflate_sequential_shared_subspace_augmented'};
+    if all(ismember(pair,keys))
+        fh = new_fig(opts.multi_width,opts.multi_height); ax = axes(fh);
+        for i = 1:2
+            idx = find(strcmp(keys,pair{i}));
+            plot(ax,steps,A.solver_its.(pair{i}), ...
+                'LineWidth',2,'Color',sty(idx).color,'LineStyle',sty(idx).linestyle, ...
+                'Marker',sty(idx).marker,'MarkerIndices',marker_idx(A.nsteps,opts));
+            hold(ax,'on');
+        end
+        xlabel(ax,'time step'); ylabel(ax,'PCG iterations');
+        title(ax,[A.case_name ': two-stage shared subspace'],'Interpreter','none');
+        legend(ax,{'Shared large + small basis','Same basis + fresh Arnoldi in both stages'}, ...
+            'Location','best','FontSize',opts.legendfontsize);
+        save_varvisc_schur_figure(fh, ...
+            fullfile(run_dir,'two_stage_augmentation_comparison.png'),opts);
+    end
+
     multi_extreme_curve(run_dir,'plot_smallest_eigenvalues.png', ...
         steps,A,'system_lambda_min','smallest eigenvalue',sty,opts);
     multi_extreme_curve(run_dir,'plot_largest_eigenvalues.png', ...

@@ -149,13 +149,13 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
             [xs,fl,rr,it] = pcg(Sapply,rhsScaled,settings.solverTol, ...
                 settings.solverMaxit,[],[],x0Scaled);
             Astat = local_record(Astat,'pcg_unprec',step,xs,fl,rr,it, ...
-                rhsNorm,y_ref_keep);
+                rhsNorm,y_ref_keep,Sapply,rhsScaled);
         end
 
         [xs,fl,rr,it] = pcg(Sapply,rhsScaled,settings.solverTol, ...
             settings.solverMaxit,invApply,[],x0Scaled);
         Astat = local_record(Astat,'chol',step,xs,fl,rr,it, ...
-            rhsNorm,y_ref_keep);
+            rhsNorm,y_ref_keep,Sapply,rhsScaled);
         if settings.plotExtremeEigenvalues
             cholSpectrumApply = @(X) Rfrozen\(Sapply(RfrozenT\X));
             Astat = local_record_extreme_spectrum( ...
@@ -233,12 +233,35 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
 
             for variantIndex = 1:numel(variants)
                 variant = variants(variantIndex);
-                [Papply,spectralApply,Vdim,largeDim,tauValues, ...
-                    basisStep,largeStep] = ...
-                    local_make_preconditioner( ...
-                    variant.design,Sapply,smallState,sharedLargeState,states, ...
-                    settings.plotExtremeEigenvalues);
                 key = variant.name;
+                if strcmp(variant.design,'sequential_shared_subspace_augmented')
+                    state = states.sequential_shared_subspace;
+                    r0 = rhsScaled; residualColumns = 0;
+                    if settings.augmentM > 0 && any(x0Scaled)
+                        r0 = rhsScaled-Sapply(x0Scaled); residualColumns = 1;
+                    end
+                    [Papply,spectralApply,augmentation] = ...
+                        varvisc_schur_two_stage_augmentation( ...
+                        Sapply,state.V,r0,settings.augmentM,state.tau1,state.tau2, ...
+                        settings.plotExtremeEigenvalues);
+                    augmentation.residual_columns = residualColumns;
+                    fields = fieldnames(augmentation);
+                    for fieldIndex = 1:numel(fields)
+                        field = fields{fieldIndex};
+                        Astat.augmentation.(key).(field)(step,1) = augmentation.(field);
+                    end
+                    Vdim = augmentation.total_rank;
+                    largeDim = size(sharedLargeState.V,2);
+                    tauValues = struct('first',state.tau1,'second',state.tau2);
+                    basisStep = state.basisBuildStep;
+                    largeStep = sharedLargeState.basisBuildStep;
+                else
+                    [Papply,spectralApply,Vdim,largeDim,tauValues, ...
+                        basisStep,largeStep] = ...
+                        local_make_preconditioner( ...
+                        variant.design,Sapply,smallState,sharedLargeState,states, ...
+                        settings.plotExtremeEigenvalues);
+                end
                 Astat.deflat_dim.(key) = Vdim;
                 Astat.deflat_dim_history.(key)(step) = Vdim;
                 Astat.large_basis_dim_history.(key)(step) = largeDim;
@@ -249,7 +272,7 @@ function Astat = solve_varvisc_schur_sequence(cfg, params, save_dir)
                 [xs,fl,rr,it] = pcg(Sapply,rhsScaled,settings.solverTol, ...
                     settings.solverMaxit,Papply,[],x0Scaled);
                 Astat = local_record(Astat,key,step,xs,fl,rr,it, ...
-                    rhsNorm,y_ref_keep);
+                    rhsNorm,y_ref_keep,Sapply,rhsScaled);
                 if settings.plotExtremeEigenvalues
                     Astat = local_record_extreme_spectrum( ...
                         Astat,key,step,spectralApply,nS,settings);
@@ -405,6 +428,10 @@ function settings = local_settings(params)
     settings.referenceTol = local_param(params,'REFERENCE_TOL',1e-10);
     settings.referenceMaxit = local_param( ...
         params,'REFERENCE_MAXIT',settings.solverMaxit);
+    settings.augmentM = local_param(params,'AUGMENT_M',20);
+
+    validateattributes(settings.augmentM,{'numeric'}, ...
+        {'scalar','integer','nonnegative','finite'},mfilename,'params.AUGMENT_M');
 
     validateattributes(settings.smEig,{'numeric'}, ...
         {'scalar','integer','positive'},mfilename,'params.sm_eig');
@@ -498,7 +525,7 @@ function design = local_variant_design(variant)
     end
     allowed = {'shared_small','gaussian_large', ...
         'sequential_shared_subspace','concatenated_once', ...
-        'adaptive_small_lift_large'};
+        'adaptive_small_lift_large','sequential_shared_subspace_augmented'};
     if ~ismember(design,allowed)
         error('solve_varvisc_schur_sequence:badDesign', ...
               'Unsupported deflation design %s.',design);
@@ -519,6 +546,9 @@ function label = local_variant_label(design,settings)
         case 'sequential_shared_subspace'
             label = sprintf(['PCG (two-stage shared-subspace deflation, ', ...
                 'k=%d+%d)'],smallWidth,largeWidth);
+        case 'sequential_shared_subspace_augmented'
+            label = sprintf(['PCG (two-stage shared-subspace + Arnoldi, ', ...
+                'k=%d+%d, m=%d)'],smallWidth,largeWidth,settings.augmentM);
         case 'concatenated_once'
             label = sprintf('PCG (one concatenated two-tail deflator, k=%d+%d)', ...
                 smallWidth,largeWidth);
@@ -533,6 +563,7 @@ function Astat = local_prealloc(keys,labels,nsteps,settings)
     Astat.solver_keys = keys(:); Astat.solver_labels = labels(:);
     Astat.solver_its = struct(); Astat.solver_flag = struct();
     Astat.solver_relres = struct(); Astat.solver_err = struct();
+    Astat.solver_true_relres = struct(); Astat.augmentation = struct();
     Astat.system_lambda_min = struct();
     Astat.system_lambda_max = struct();
     Astat.system_kappa = struct();
@@ -544,6 +575,7 @@ function Astat = local_prealloc(keys,labels,nsteps,settings)
         Astat.solver_its.(key) = nan(nsteps,1);
         Astat.solver_flag.(key) = nan(nsteps,1);
         Astat.solver_relres.(key) = nan(nsteps,1);
+        Astat.solver_true_relres.(key) = nan(nsteps,1);
         Astat.solver_err.(key) = nan(nsteps,1);
         Astat.system_lambda_min.(key) = nan(nsteps,1);
         Astat.system_lambda_max.(key) = nan(nsteps,1);
@@ -566,7 +598,7 @@ function Astat = local_prealloc(keys,labels,nsteps,settings)
     Astat.tau = NaN;
     tauFields = {'shared_small','gaussian_large','sequential_stage1', ...
         'sequential_stage2','concatenated_once','adaptive_lift', ...
-        'adaptive_large'};
+        'adaptive_large','augmented_stage1','augmented_stage2'};
     Astat.deflation_tau = struct();
     for index = 1:numel(tauFields)
         Astat.deflation_tau.(tauFields{index}) = nan(nsteps,1);
@@ -705,7 +737,8 @@ end
 function needed = local_shared_large_needed(variants)
     designs = {variants.design};
     needed = any(ismember(designs,{'gaussian_large', ...
-        'sequential_shared_subspace','concatenated_once'}));
+        'sequential_shared_subspace','concatenated_once', ...
+        'sequential_shared_subspace_augmented'}));
 end
 
 function width = local_small_basis_width(settings,needed)
@@ -817,7 +850,8 @@ end
 function [states,Astat] = local_refresh_arm_states( ...
         sharedLargeState,states,Astat,Sapply,nS,smallState,smallRefreshed, ...
         sharedLargeRefreshed,cutoffs,settings,refresh,variants,step)
-    if local_design_enabled(variants,'sequential_shared_subspace')
+    if local_design_enabled(variants,'sequential_shared_subspace') || ...
+            local_design_enabled(variants,'sequential_shared_subspace_augmented')
         if sharedLargeRefreshed || smallRefreshed || ...
                 isempty(states.sequential_shared_subspace.V)
             states.sequential_shared_subspace.V = local_combine_bases( ...
@@ -1076,6 +1110,9 @@ function Astat = local_record_tau(Astat,design,step,tauValues)
         case 'sequential_shared_subspace'
             Astat.deflation_tau.sequential_stage1(step) = tauValues.first;
             Astat.deflation_tau.sequential_stage2(step) = tauValues.second;
+        case 'sequential_shared_subspace_augmented'
+            Astat.deflation_tau.augmented_stage1(step) = tauValues.first;
+            Astat.deflation_tau.augmented_stage2(step) = tauValues.second;
         case 'concatenated_once'
             Astat.deflation_tau.concatenated_once(step) = tauValues.first;
         case 'adaptive_small_lift_large'
@@ -1109,10 +1146,12 @@ function widths = local_two_tail_widths(nS,smallWidth,largeWidth)
     end
 end
 
-function Astat = local_record(Astat,key,step,xscaled,fl,rr,it,rhsnorm,yref)
+function Astat = local_record(Astat,key,step,xscaled,fl,rr,it,rhsnorm,yref,Sapply,rhsScaled)
     Astat.solver_its.(key)(step) = it;
     Astat.solver_flag.(key)(step) = fl;
     Astat.solver_relres.(key)(step) = rr;
+    Astat.solver_true_relres.(key)(step) = ...
+        norm(Sapply(xscaled)-rhsScaled)/max(norm(rhsScaled),realmin);
     x = xscaled*rhsnorm;
     Astat.solver_err.(key)(step) = norm(x-yref)/max(norm(yref),eps);
 end
