@@ -64,59 +64,201 @@ By default, the ILDL factor is rebuilt every step (`ILDL_PREC_REFRESH = 1`), whi
 
 ## 3. Construct the fresh projected Krylov space
 
-Define the orthogonal projector onto the complement of $V_i$:
+Fix the system index $i$. Write $n$ for the current system dimension and $k$ for the number of columns of $V_i$. Define
 
 $$
-\Pi_i = I - V_i V_i^T.
+V_i \in \mathbb{R}^{n\times k}, \qquad
+V_i^T V_i = I_k, \qquad
+\mathcal{V}_i = \mathrm{range}(V_i).
 $$
 
-Use the current split operator and RHS to define
+The equations below hold in exact arithmetic; computed orthogonality and recurrence identities hold up to rounding error. The construction uses $\widehat{A}_i=C_i^{-1}A_iC_i^{-T}$, so the complement is taken in split coordinates.
+
+### 3.1 Projected operator and target subspace
+
+The projector onto $\mathcal{V}_i^\perp$ satisfies
+
+$$
+\Pi_i = I_n-V_iV_i^T, \qquad
+\Pi_i^T = \Pi_i, \qquad
+\Pi_i^2 = \Pi_i, \qquad
+\mathrm{range}(\Pi_i)=\mathcal{V}_i^\perp.
+$$
+
+Define the symmetric projected operator and starting residual by
 
 $$
 A_{i,\perp} = \Pi_i\widehat{A}_i\Pi_i,
 \qquad
-r_{i,\perp} = \Pi_i\widehat{b}_i.
+A_{i,\perp}^T=A_{i,\perp},
 $$
 
-For a requested augmentation dimension $m$, the columns of $W$ span
+$$
+y_i^{(0)}=0, \qquad
+\widehat{r}_i^{(0)}=\widehat{b}_i-\widehat{A}_iy_i^{(0)}=\widehat{b}_i,
+\qquad
+r_{i,\perp}=\Pi_i\widehat{r}_i^{(0)}.
+$$
+
+For $m\geq1$, the target Krylov subspace is
 
 $$
-\boxed{
-\mathrm{range}(W)
-= \mathcal{K}_m(A_{i,\perp},r_{i,\perp})
-= \mathrm{span}(
+\mathcal{W}_{i,m}=\mathcal{K}_m(A_{i,\perp},r_{i,\perp})
+=\mathrm{span}\lbrace
 r_{i,\perp},\,
 A_{i,\perp}r_{i,\perp},\,\ldots,\,
 A_{i,\perp}^{m-1}r_{i,\perp}
-).
-}
+\rbrace
+\subseteq\mathcal{V}_i^\perp.
 $$
 
-This formula assumes a nonzero starting vector and no early breakdown. The solver supplies no previous solution as an initial guess, so the starting residual is the split RHS before projection.
-
-[varvisc_build_projected_arnoldi.m](varvisc_build_projected_arnoldi.m) constructs this basis without forming a dense projector:
-
-1. Project $\widehat{b}_i$ against $V_i$ twice and normalize the result.
-2. For each available vector $w_j$, compute $a=\widehat{A}_i w_j$.
-3. Apply two passes of orthogonalization against $V_i$ and the existing columns $w_1,\ldots,w_j$.
-4. Normalize the remaining vector to obtain $w_{j+1}$, if another column is needed and breakdown has not occurred.
-
-Consequently, up to rounding error,
+The implementation returns a basis matrix $W=W_\ell$ with actual dimension $\ell$:
 
 $$
-V_i^T W = 0, \qquad W^T W = I.
+W_\ell=[w_1,\ldots,w_\ell]\in\mathbb{R}^{n\times\ell},
+\qquad
+0\leq\ell\leq m_*:=\min(m,n-k).
 $$
 
-The retained Arnoldi relation is
+For a nonzero start and $\ell$ accepted Arnoldi vectors,
 
 $$
-\widehat{A}_i W = V_i B + W H + f e_{\ell}^T,
-\qquad \ell = \mathrm{cols}(W),
+\mathrm{range}(W_\ell)=\mathcal{K}_\ell(A_{i,\perp},r_{i,\perp}),
+\qquad
+V_i^TW_\ell=0, \qquad W_\ell^TW_\ell=I_\ell.
 $$
 
-where $B$ records the components along $V_i$, $H$ is the projected Arnoldi matrix, $f$ is the final unnormalized remainder, and $e_{\ell}$ is the last coordinate vector. This relation applies when $\ell>0$.
+### 3.2 Initialization and two-pass Arnoldi recurrence
 
-The default is $m=20$. A zero projected start, early breakdown, or the available complement dimension can produce fewer columns; no random padding is added. For $m=0$, $W$ is empty and the solver reduces to Gaussian recycling without augmentation. A short forward Krylov basis is RHS-dependent and need not resolve all eigenvalues nearest zero.
+The initial projection in [varvisc_build_projected_arnoldi.m](varvisc_build_projected_arnoldi.m) is evaluated twice:
+
+$$
+\rho^{(0)}=\widehat{b}_i, \qquad
+\rho^{(s)}=\rho^{(s-1)}-V_i(V_i^T\rho^{(s-1)}),
+\qquad s=1,2.
+$$
+
+Thus $\rho^{(2)}=r_{i,\perp}$ in exact arithmetic. If the start is accepted, set
+
+$$
+\beta=\lVert\rho^{(2)}\rVert_2, \qquad
+w_1=\frac{\rho^{(2)}}{\beta}.
+$$
+
+At iteration $j$, let $W_j=[w_1,\ldots,w_j]$ and compute
+
+$$
+a_j=\widehat{A}_iw_j, \qquad z_j^{(0)}=a_j.
+$$
+
+For each orthogonalization pass $s=1,2$, evaluate in order
+
+$$
+c_j^{(s)}=V_i^Tz_j^{(s-1)}, \qquad
+\widetilde{z}_j^{(s)}=z_j^{(s-1)}-V_ic_j^{(s)},
+$$
+
+$$
+g_j^{(s)}=W_j^T\widetilde{z}_j^{(s)}, \qquad
+z_j^{(s)}=\widetilde{z}_j^{(s)}-W_jg_j^{(s)}.
+$$
+
+Accumulate both passes into the Arnoldi coefficients:
+
+$$
+\gamma_j=c_j^{(1)}+c_j^{(2)}\in\mathbb{R}^k, \qquad
+h_{1:j,j}=g_j^{(1)}+g_j^{(2)}\in\mathbb{R}^j,
+\qquad
+\eta_j=\lVert z_j^{(2)}\rVert_2.
+$$
+
+If $j<m_*$ and the remainder is accepted, append
+
+$$
+h_{j+1,j}=\eta_j, \qquad
+w_{j+1}=\frac{z_j^{(2)}}{\eta_j}.
+$$
+
+These updates give the column relation
+
+$$
+\widehat{A}_iw_j=V_i\gamma_j+W_jh_{1:j,j}+z_j^{(2)}.
+$$
+
+Since $\Pi_iw_j=w_j$, the exact-arithmetic remainder also satisfies
+
+$$
+z_j^{(2)}=(I_n-W_jW_j^T)\Pi_i\widehat{A}_iw_j
+         =(I_n-W_jW_j^T)A_{i,\perp}w_j.
+$$
+
+This identity establishes that the recurrence is Arnoldi applied to $A_{i,\perp}$ with starting vector $r_{i,\perp}$, implemented through products with $\widehat{A}_i$ and orthogonalization against $V_i$.
+
+### 3.3 Termination and returned dimension
+
+Let $\varepsilon_b=100\varepsilon_{\mathrm{mach}}$ be the default breakdown tolerance and let $\delta_{\min}$ denote MATLAB's `realmin`. The start is rejected, yielding $W\in\mathbb{R}^{n\times0}$, when
+
+$$
+m_*=0
+\quad\text{or}\quad
+\beta\leq\varepsilon_b\max(\lVert\widehat{b}_i\rVert_2,\delta_{\min}).
+$$
+
+After processing column $j$, the algorithm terminates with $\ell=j$ when
+
+$$
+j=m_*
+\quad\text{or}\quad
+\eta_j\leq\varepsilon_b\max(\lVert a_j\rVert_2,\delta_{\min}).
+$$
+
+If $\eta_j=0$ exactly, the generated Krylov subspace is invariant under $A_{i,\perp}$. A small positive $\eta_j$ triggers numerical breakdown without asserting exact invariance. The default requested dimension is $m=20$; rejected or unavailable directions are never replaced by random padding.
+
+### 3.4 Matrix Arnoldi identities
+
+For $\ell>0$, define
+
+$$
+B_\ell=[\gamma_1,\ldots,\gamma_\ell]\in\mathbb{R}^{k\times\ell},
+\qquad
+H_\ell=(h_{pq})_{p,q=1}^{\ell}\in\mathbb{R}^{\ell\times\ell},
+\qquad
+f_\ell=z_\ell^{(2)}.
+$$
+
+Here $H_\ell$ is upper Hessenberg, with the accumulated coefficients and subdiagonal entries defined above. Let $e_\ell$ be the last coordinate vector in $\mathbb{R}^\ell$. The retained full-operator and projected-operator relations are
+
+$$
+\widehat{A}_iW_\ell
+=V_iB_\ell+W_\ell H_\ell+f_\ell e_\ell^T,
+$$
+
+$$
+A_{i,\perp}W_\ell
+=W_\ell H_\ell+f_\ell e_\ell^T,
+\qquad
+V_i^Tf_\ell=0, \qquad W_\ell^Tf_\ell=0.
+$$
+
+In exact arithmetic,
+
+$$
+B_\ell=V_i^T\widehat{A}_iW_\ell, \qquad
+H_\ell=W_\ell^T\widehat{A}_iW_\ell
+      =W_\ell^TA_{i,\perp}W_\ell.
+$$
+
+Because $A_{i,\perp}$ is symmetric, $H_\ell$ is symmetric and therefore tridiagonal in exact arithmetic. The code retains the full small matrix to accommodate rounding error and reorthogonalization.
+
+The augmented basis passed to the coarse correction is
+
+$$
+S_i=[V_i\;W_\ell], \qquad
+S_i^TS_i=I_{k+\ell}, \qquad
+\mathrm{range}(S_i)=\mathcal{V}_i\oplus\mathcal{K}_\ell(A_{i,\perp},r_{i,\perp}).
+$$
+
+For $\ell=0$, set $S_i=V_i$. The Krylov term is rebuilt from the current operator and RHS at every system index $i$; it is not added to the cached physical basis $U$.
 
 ## 4. Form the augmented coarse correction
 
