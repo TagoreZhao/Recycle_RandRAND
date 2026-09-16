@@ -147,6 +147,12 @@ function solvers = varvisc_define_solver_list(params)
 
     solvers = {};
 
+    % Focused paired-power experiment; q retains its existing application count.
+    if strcmpi(getdef(params, 'SOLVER_PROFILE', 'full'), 'gaussian_refresh')
+        solvers = varvisc_gaussian_refresh_solvers(params);
+        return;
+    end
+
     % Focused upgraded-example profile: one plain ILDL baseline and two
     % rank-matched exact-basis arms.  Both deflation arms use the same frozen
     % physical subspace; only tau differs, which isolates the dynamic selector.

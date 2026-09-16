@@ -1,5 +1,78 @@
 # Variable-viscosity Stokes immersed rotor
 
+## Paired Gaussian recycling versus rebuilding
+
+```matlab
+addpath('symindefinite/stokes_varvisc_rotor');
+maxNumCompThreads(4);
+test_varvisc_gaussian_refresh;
+run_varvisc_gaussian_refresh_benchmark('smoke');
+run_varvisc_gaussian_refresh_benchmark('full');
+% Resume/checkpoint one seed and case, or regenerate the complete report:
+run_varvisc_gaussian_refresh_benchmark('full', 2, 1);
+run_varvisc_gaussian_refresh_benchmark('finalize');
+```
+
+This focused two-arm experiment retains the existing meaning of `q`: exactly
+`q` applications of the inverse split operator
+`B_i = C_i' * (K_i \ C_i)`. The first arm builds
+`V_1 = orth(B_1^2 * Omega)` once (`q=2`) and recycles the physical space
+`U = C_1^{-T} V_1`, transported each step as `orth(C_i' * U)`. The second
+builds `V_i = orth(B_i * Omega)` (`q=1`) at every timestep, using an exact
+LDL decomposition of the current physical matrix. Both use the current ILDL
+smoother, current squared-operator coarse correction, fixed `tau=0.5`, and
+MINRES with a zero initial guess. There is no Arnoldi augmentation.
+
+The full experiment uses the original three cases, `h=0.05`, 60 timesteps,
+`dt=0.02`, tolerance `1e-8`, and 1,000 sketch columns (500 times oversampling
+2, without requested-rank truncation). Seeds 1, 2, and 3 share the saved mesh
+and physical trajectory; within each seed, both arms and all steps share the
+same Gaussian start block from an independent stream. The smoke experiment
+uses all three seeds and cases with `h=0.16`, 16 columns and three physical
+steps, preserving the full motion period.
+
+Outputs live in `benchmark_varvisc_gaussian_refresh/` (or the `_smoke`
+sibling): `comparison_results.csv`, per-seed `comparison_summary.csv`,
+`comparison_report.md`, convergence/work plots and complete solver-reported
+residual histories in each case's `diagnostics/`. Configuration-checked
+per-case checkpoints support resuming completed jobs. Use the same MATLAB
+version and thread count when resuming or finalizing.
+
+Two inverse applications give stronger initial weighting to near-zero
+eigenmodes, but that subspace can become stale as viscosity and rotor position
+change. Rebuilding follows the current operator with weaker filtering and
+additional setup cost. It is optional, not a mathematical requirement.
+The comparison measures the combined effect of changing power count and
+refresh cadence; it does not isolate their individual effects.
+The refreshed sketch requires the current inverse: an old LDL combined with
+the current split factor would apply `C_i' * K_1^{-1} * C_i`, a different
+operator. Exact LDL also permits a direct solve, so this experiment assesses
+basis strategies without claiming an advantage over direct solution.
+
+Attributed time includes each arm's required exact LDL factorizations, even
+when the actual first-step factor is shared. The common reference solve is
+not treated as a free inverse. Assembly, reference solves, diagnostics and
+plotting are excluded from algorithm time. Inverse RHS counts and forward
+operator counts are reported separately. Final physical residuals and
+reference-solution errors accompany MINRES's reported convergence: a zero
+solver flag does not imply the same tolerance in physical coordinates.
+
+The completed full run gave these median total iteration counts per 60-step
+trajectory across the three seeds:
+
+| Case | Recycled `q=2` | Refreshed `q=1` |
+|---|---:|---:|
+| `bar_rotating_nu_orbiting` | 7,626 | 9,354 |
+| `disk_translating_nu_wake` | 9,965 | 9,826 |
+| `disk_static_nu_const` | 5,979 | 10,855 |
+
+The refreshed arm took 2.38–2.82 times the attributed algorithm time. All
+1,080 solves returned zero MINRES flags, with no rank loss or forced rebuilds,
+but all physical residuals exceeded `1e-8` (maximum `1.18e-6`). Thus these
+are comparisons at the common solver stopping tolerance, with physical
+accuracy reported separately. The [full report](benchmark_varvisc_gaussian_refresh/comparison_report.md)
+contains seed ranges, accuracy tables, work counts and convergence plots.
+
 ## Gaussian basis plus projected Arnoldi
 
 Run the additive augmentation experiment from the repository root:
