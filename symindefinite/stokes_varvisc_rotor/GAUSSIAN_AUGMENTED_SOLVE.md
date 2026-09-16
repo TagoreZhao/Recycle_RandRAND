@@ -33,12 +33,12 @@ Let $V_i$ be an orthonormal basis for the subspace of interest in these split co
 At the first step, draw a Gaussian matrix $\Omega \in \mathbb{R}^{n \times k}$ and apply the exact inverse of the split operator $q$ times:
 
 $$
-V_1 = \operatorname{orth}\!\left(\widehat{A}_1^{-q}\Omega\right),
+V_1 = \mathrm{orth}\!\left(\widehat{A}_1^{-q}\Omega\right),
 \qquad
 \widehat{A}_1^{-1} = C_1^T A_1^{-1} C_1.
 $$
 
-Here $\operatorname{orth}$ denotes an orthonormal basis for the column space. The implementation applies the inverse through a direct factorization of $A_1$ and performs QR after the power rounds. Inverse powers emphasize eigenvectors with small eigenvalue magnitudes, so $V_1$ approximates the corresponding invariant subspace. It is a randomized range approximation, rather than an exact eigenspace.
+Here $\mathrm{orth}$ denotes an orthonormal basis for the column space. The implementation applies the inverse through a direct factorization of $A_1$ and performs QR after the power rounds. Inverse powers emphasize eigenvectors with small eigenvalue magnitudes, so $V_1$ approximates the corresponding invariant subspace. It is a randomized range approximation, rather than an exact eigenspace.
 
 With the augmented driver's settings, $q=2$ and $k=2\times500=1000$. All sketch columns are retained by the initial QR; there is no reduction back to 500 columns. See [build_deflation_V.m](../../+src/+precond/build_deflation_V.m) and [subspace_iter_plain.m](../../+src/+precond/subspace_iter_plain.m).
 
@@ -51,13 +51,13 @@ $$
 At step $i$, it is expressed in the current split coordinates and orthonormalized:
 
 $$
-\boxed{V_i = \operatorname{orth}(C_i^T U).}
+\boxed{V_i = \mathrm{orth}(C_i^T U).}
 $$
 
 In exact arithmetic, this preserves the physical span:
 
 $$
-\operatorname{range}(C_i^{-T}V_i) = \operatorname{range}(U).
+\mathrm{range}(C_i^{-T}V_i) = \mathrm{range}(U).
 $$
 
 By default, the ILDL factor is rebuilt every step (`ILDL_PREC_REFRESH = 1`), while the physical Gaussian basis is frozen (`DEFLAT_PREC_REFRESH = Inf`). Thus $V_i$ is transported from the cached basis, rather than resketched from $A_i$ at every step. The implementation rebuilds the basis if the system dimension changes and can discard numerically dependent columns during transport. The cache and transport logic is in [varvisc_define_solver_list.m](varvisc_define_solver_list.m), in `two_level_parts` and `cached_basis`.
@@ -82,9 +82,9 @@ For a requested augmentation dimension $m$, the columns of $W$ span
 
 $$
 \boxed{
-\operatorname{range}(W)
+\mathrm{range}(W)
 = \mathcal{K}_m(A_{i,\perp},r_{i,\perp})
-= \operatorname{span}\!\left\{
+= \mathrm{span}\!\left\{
 r_{i,\perp},\,
 A_{i,\perp}r_{i,\perp},\,\ldots,\,
 A_{i,\perp}^{m-1}r_{i,\perp}
@@ -111,7 +111,7 @@ The retained Arnoldi relation is
 
 $$
 \widehat{A}_i W = V_i B + W H + f e_{\ell}^T,
-\qquad \ell = \operatorname{cols}(W),
+\qquad \ell = \mathrm{cols}(W),
 $$
 
 where $B$ records the components along $V_i$, $H$ is the projected Arnoldi matrix, $f$ is the final unnormalized remainder, and $e_{\ell}$ is the last coordinate vector. This relation applies when $\ell>0$.
@@ -152,7 +152,7 @@ The symmetric inverse square root is computed from the small eigendecomposition 
 The action is the identity on the complement of $S_i$ and applies a spectral correction within $S_i$. If $S_i$ were an exact invariant subspace of $\widehat{A}_i$, every captured eigenvalue $\lambda$ would be mapped by preconditioning to
 
 $$
-\lambda \longmapsto \sqrt{\tau}\,\operatorname{sign}(\lambda).
+\lambda \longmapsto \sqrt{\tau}\,\mathrm{sign}(\lambda).
 $$
 
 This explains the intended clustering of captured modes while preserving an SPD preconditioner for the indefinite system. For an approximate invariant subspace, the exact eigenvalue mapping does not apply.
@@ -172,7 +172,7 @@ $$
 
 The powers of $D_i$ in this equation describe the mathematical equivalence; the code passes the action of $D_i$ directly to MATLAB's `minres`. The projected operator $A_{i,\perp}$ builds $W$, while the full split operator drives the final solve. The squared operator is used only to construct the coarse correction, so the solver still solves the original indefinite system.
 
-With the default augmented settings, the target coarse dimension is $1000+20=1020$. The actual dimension is $\operatorname{cols}(V_i)+\operatorname{cols}(W)$.
+With the default augmented settings, the target coarse dimension is $1000+20=1020$. The actual dimension is $\mathrm{cols}(V_i)+\mathrm{cols}(W)$.
 
 After the solve, $W$ is discarded. At step $i+1$, the solver transports the same cached physical basis $U$ and builds a new $W$ from the current operator and RHS. The Krylov augmentation does not accumulate across timesteps.
 
