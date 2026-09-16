@@ -33,7 +33,7 @@ Let $V_i$ be an orthonormal basis for the subspace of interest in these split co
 At the first step, draw a Gaussian matrix $\Omega \in \mathbb{R}^{n \times k}$ and apply the exact inverse of the split operator $q$ times:
 
 $$
-V_1 = \mathrm{orth}\!\left(\widehat{A}_1^{-q}\Omega\right),
+V_1 = \mathrm{orth}(\widehat{A}_1^{-q}\Omega),
 \qquad
 \widehat{A}_1^{-1} = C_1^T A_1^{-1} C_1.
 $$
@@ -84,11 +84,11 @@ $$
 \boxed{
 \mathrm{range}(W)
 = \mathcal{K}_m(A_{i,\perp},r_{i,\perp})
-= \mathrm{span}\!\left\{
+= \mathrm{span}(
 r_{i,\perp},\,
 A_{i,\perp}r_{i,\perp},\,\ldots,\,
 A_{i,\perp}^{m-1}r_{i,\perp}
-\right\}.
+).
 }
 $$
 
